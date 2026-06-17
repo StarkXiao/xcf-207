@@ -164,6 +164,8 @@ import type {
   BossSkillWarning,
   RewardTier,
   FailureCompensation,
+  OfflineBuildingDetail,
+  OfflineEarnings,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -200,6 +202,27 @@ const calculateTotemBonus = (
   let bonus = 0;
   bonus += getTotemEffectBonus(unlockedTotems, effectType, target);
   bonus += getBlessingBonus(activeBlessings, effectType, target);
+  return bonus;
+};
+
+const calculateBuildingBonus = (
+  state: GameState,
+  effectType: PolicyEffectType | TechEffectType | TotemEffectType,
+  target?: string
+): number => {
+  let bonus = 0;
+  for (const b of state.buildings) {
+    if (b.isBuilding) continue;
+    const config = BUILDINGS[b.type];
+    if (!config?.effects) continue;
+    for (const effect of config.effects) {
+      if (effect.type === effectType) {
+        if (!effect.target || effect.target === target) {
+          bonus += (effect.value || 0) * b.level;
+        }
+      }
+    }
+  }
   return bonus;
 };
 
@@ -365,7 +388,22 @@ const BUILDING_PRODUCTION_STORAGE_RATIO = 50;
 const TRANSPORT_BASE_TIME = 10;
 const MAX_TRANSPORT_TASKS = 5;
 const MAX_OFFLINE_HOURS = 8;
-const OFFLINE_EFFICIENCY = 0.7;
+const BASE_OFFLINE_EFFICIENCY = 0.7;
+
+const OFFLINE_DECAY_CONFIG = {
+  thresholdHours: 2,
+  decayPerHour: 0.08,
+  minEfficiency: 0.3,
+};
+
+const OFFLINE_STORAGE_CAP_RATIO = 0.9;
+const OFFLINE_MIN_TRIGGER_SECONDS = 60;
+
+const SAVE_REPAIR_CONFIG = {
+  maxDaysInFuture: 1,
+  maxDaysInPast: 365,
+  maxResourceMultiplier: 100,
+};
 
 const getBuildingCapacityByType = (type: BuildingType, level: number): Partial<Resources> => {
   const config = BUILDINGS[type];
@@ -583,6 +621,323 @@ const createInitialState = (): GameState => {
   };
 };
 
+const calculateOfflineTimeDecay = (offlineHours: number): { decayRate: number; effectiveHours: number } => {
+  const { thresholdHours, decayPerHour, minEfficiency } = OFFLINE_DECAY_CONFIG;
+
+  if (offlineHours <= thresholdHours) {
+    return { decayRate: 1, effectiveHours: offlineHours };
+  }
+
+  const hoursOverThreshold = offlineHours - thresholdHours;
+  const totalDecay = Math.min(hoursOverThreshold * decayPerHour, 1 - minEfficiency);
+  const decayRate = 1 - totalDecay;
+
+  const effectiveHours = thresholdHours + hoursOverThreshold * decayRate;
+
+  return { decayRate, effectiveHours };
+};
+
+const repairCorruptedSave = (state: GameState, now: number): { state: GameState; repairs: string[] } => {
+  const repairs: string[] = [];
+  const { maxDaysInFuture, maxDaysInPast, maxResourceMultiplier } = SAVE_REPAIR_CONFIG;
+  const msPerDay = 24 * 60 * 60 * 1000;
+
+  const lastOnline = state.lastOnlineTime || 0;
+  const daysInFuture = (lastOnline - now) / msPerDay;
+  if (daysInFuture > maxDaysInFuture) {
+    state.lastOnlineTime = now;
+    repairs.push(`修正异常时间戳：lastOnlineTime 在未来 ${daysInFuture.toFixed(1)} 天，已重置为当前时间`);
+  }
+  const daysInPast = (now - lastOnline) / msPerDay;
+  if (lastOnline > 0 && daysInPast > maxDaysInPast) {
+    state.lastOnlineTime = now - maxDaysInPast * msPerDay;
+    repairs.push(`修正过久离线：lastOnlineTime 在 ${daysInPast.toFixed(0)} 天前，已限制为 ${maxDaysInPast} 天`);
+  }
+
+  for (const building of state.buildings) {
+    if (!building.storage) building.storage = {};
+
+    for (const key of Object.keys(building.storage) as (keyof Resources)[]) {
+      const val = building.storage[key];
+      if (val === undefined || val === null) {
+        delete building.storage[key];
+        continue;
+      }
+      if (typeof val !== 'number' || isNaN(val) || !isFinite(val)) {
+        building.storage[key] = 0;
+        repairs.push(`修正 ${BUILDINGS[building.type]?.name || building.type} 的 ${key}：异常数值类型，已重置为 0`);
+        continue;
+      }
+      if (val < 0) {
+        repairs.push(`修正 ${BUILDINGS[building.type]?.name || building.type} 的 ${key}：负数 ${val.toFixed(1)}，已重置为 0`);
+        building.storage[key] = 0;
+      }
+    }
+
+    const buildingCap = getBuildingCapacityByType(building.type, building.level);
+    for (const key of Object.keys(buildingCap) as (keyof Resources)[]) {
+      const capVal = buildingCap[key] || 0;
+      const stored = building.storage[key] || 0;
+      const safeMax = capVal * maxResourceMultiplier;
+      if (capVal > 0 && stored > safeMax) {
+        repairs.push(`修正 ${BUILDINGS[building.type]?.name || building.type} 的 ${key}：存储 ${stored.toFixed(0)} 远超容量 ${capVal}，已裁剪为 ${safeMax.toFixed(0)}`);
+        building.storage[key] = safeMax;
+      }
+    }
+
+    if (typeof building.level !== 'number' || !isFinite(building.level) || building.level < 1) {
+      building.level = 1;
+      repairs.push(`修正 ${BUILDINGS[building.type]?.name || building.type} 等级：异常值，已重置为 1`);
+    }
+    if (building.level > 999) {
+      building.level = 999;
+      repairs.push(`修正 ${BUILDINGS[building.type]?.name || building.type} 等级：过大 ${building.level}，已限制`);
+    }
+    if (building.buildProgress === undefined || building.buildProgress === null ||
+        typeof building.buildProgress !== 'number' || isNaN(building.buildProgress)) {
+      building.buildProgress = 100;
+      building.isBuilding = false;
+    }
+  }
+
+  if (state.population === undefined || state.population === null ||
+      typeof state.population !== 'number' || isNaN(state.population) || !isFinite(state.population)) {
+    state.population = 8;
+    repairs.push('修正人口：异常值，已重置为 8');
+  }
+  if (state.population < 0) {
+    state.population = Math.max(1, calculateMilitaryPopulation(state.warriors) + 1);
+    repairs.push(`修正人口：负数，已重置为军队人口+1`);
+  }
+
+  if (state.maxPopulation < state.population) {
+    state.maxPopulation = state.population + 5;
+    repairs.push(`修正人口上限：${state.maxPopulation} < 人口 ${state.population}，已调整`);
+  }
+
+  if (state.loyalty === undefined || state.loyalty === null ||
+      typeof state.loyalty !== 'number' || isNaN(state.loyalty) || !isFinite(state.loyalty)) {
+    state.loyalty = 70;
+    repairs.push('修正忠诚值：异常值，已重置为 70');
+  }
+  if (state.loyalty < 0) {
+    state.loyalty = 0;
+    repairs.push('修正忠诚值：负数，已限制为 0');
+  }
+  if (state.loyalty > 100) {
+    state.loyalty = 100;
+    repairs.push('修正忠诚值：超过100，已限制为 100');
+  }
+
+  if (state.day === undefined || state.day === null ||
+      typeof state.day !== 'number' || isNaN(state.day) || !isFinite(state.day)) {
+    state.day = 1;
+    repairs.push('修正天数：异常值，已重置为 1');
+  }
+  if (state.day < 1) {
+    state.day = 1;
+    repairs.push('修正天数：小于 1，已重置为 1');
+  }
+  if (state.day > 99999) {
+    state.day = 99999;
+    repairs.push(`修正天数：过大 ${state.day}，已限制`);
+  }
+
+  state.warriors = (state.warriors || []).filter((w) => {
+    if (!w || typeof w !== 'object') return false;
+    if (!w.id || !w.type) {
+      repairs.push('移除异常战士数据：缺少必要字段');
+      return false;
+    }
+    return true;
+  });
+
+  if (!Array.isArray(state.buildings) || state.buildings.length === 0) {
+    repairs.push('建筑数据异常，重新初始化初始建筑');
+    const initial = createInitialState();
+    state.buildings = initial.buildings;
+  }
+
+  state.resources = calculateTotalResources(state.buildings);
+  state.resourceCapacity = calculateResourceCapacity(state.buildings, state.technologies);
+
+  return { state, repairs };
+};
+
+const calculateOfflineEarningsInternal = (
+  state: GameState,
+  now: number
+): {
+  updatedBuildings: Building[];
+  earnings: OfflineEarnings | null;
+} => {
+  const warnings: string[] = [];
+  const lastOnline = state.lastOnlineTime || now;
+  let offlineMs = now - lastOnline;
+
+  if (offlineMs < 0) {
+    warnings.push('检测到时间回退，离线收益已取消');
+    offlineMs = 0;
+  }
+
+  let offlineSeconds = offlineMs / 1000;
+  const maxOfflineSeconds = MAX_OFFLINE_HOURS * 3600;
+
+  if (offlineSeconds > maxOfflineSeconds) {
+    warnings.push(`离线超过 ${MAX_OFFLINE_HOURS} 小时，仅计算前 ${MAX_OFFLINE_HOURS} 小时收益`);
+    offlineSeconds = maxOfflineSeconds;
+  }
+
+  if (offlineSeconds < OFFLINE_MIN_TRIGGER_SECONDS) {
+    return { updatedBuildings: state.buildings, earnings: null };
+  }
+
+  const offlineHours = offlineSeconds / 3600;
+  const { decayRate, effectiveHours } = calculateOfflineTimeDecay(offlineHours);
+  const effectiveSeconds = effectiveHours * 3600;
+
+  const weatherEffects = calculateWeatherEffects(state.season, state.weather);
+
+  let totalTechBonus = 0;
+  let totalBuildingBonus = 0;
+  let totalTotemBonus = 0;
+  let totalGovernmentBonus = 0;
+
+  const perBuildingGain: Record<string, { gain: Partial<Resources>; building: Building; capped: boolean }> = {};
+  const perBuildingDetail: OfflineBuildingDetail[] = [];
+  const totalGain: Partial<Resources> = {};
+  const cappedByStorage: Partial<Resources> = {};
+
+  for (const b of state.buildings) {
+    if (b.isBuilding) continue;
+
+    const production = getBuildingProduction(b.type, b.level);
+    if (Object.keys(production).length === 0) continue;
+
+    const prodTechBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
+    const globalProdTechBonus = calculateTechBonus(state.technologies, 'production_boost');
+    totalTechBonus = Math.max(totalTechBonus, prodTechBonus + globalProdTechBonus);
+
+    const prodBuildingBonus = 0;
+    const globalProdBuildingBonus = calculateBuildingBonus?.(state, 'production_boost', b.type) || 0;
+    totalBuildingBonus = Math.max(totalBuildingBonus, prodBuildingBonus + globalProdBuildingBonus);
+
+    const prodTotemBonus = calculateTotemBonus(state.totem?.unlockedTotems || [], state.totem?.activeBlessings || [], 'production_boost', b.type);
+    const globalProdTotemBonus = calculateTotemBonus(state.totem?.unlockedTotems || [], state.totem?.activeBlessings || [], 'production_boost');
+    totalTotemBonus = Math.max(totalTotemBonus, prodTotemBonus + globalProdTotemBonus);
+
+    const prodGovBonus = calculateGovernmentBonus(state, 'production_boost', b.type);
+    const globalProdGovBonus = calculateGovernmentBonus(state, 'production_boost');
+    totalGovernmentBonus = Math.max(totalGovernmentBonus, prodGovBonus + globalProdGovBonus);
+
+    const totalProdBonus = 1 +
+      prodTechBonus + globalProdTechBonus +
+      prodBuildingBonus + globalProdBuildingBonus +
+      prodTotemBonus + globalProdTotemBonus +
+      prodGovBonus + globalProdGovBonus;
+
+    const baseBuildingGain: Partial<Resources> = {};
+    const finalBuildingGain: Partial<Resources> = {};
+    let buildingCapped = false;
+
+    const buildingCap = getBuildingCapacityByType(b.type, b.level);
+    const currentStorage = { ...(b.storage || {}) };
+
+    for (const [key, rate] of Object.entries(production)) {
+      const resourceKey = key as keyof Resources;
+      const weatherMod = weatherEffects.resourceModifiers[resourceKey] || 0;
+
+      const baseAmount = (rate as number) * effectiveSeconds * totalProdBonus * BASE_OFFLINE_EFFICIENCY * (1 + weatherMod);
+      baseBuildingGain[resourceKey] = baseAmount;
+
+      const maxCap = buildingCap[resourceKey] || 0;
+      const current = currentStorage[resourceKey] || 0;
+      const hardCap = maxCap > 0 ? maxCap * OFFLINE_STORAGE_CAP_RATIO : 0;
+
+      if (hardCap > 0 && current + baseAmount > hardCap) {
+        const actualGain = Math.max(0, hardCap - current);
+        finalBuildingGain[resourceKey] = actualGain;
+        const overflow = baseAmount - actualGain;
+        cappedByStorage[resourceKey] = (cappedByStorage[resourceKey] || 0) + overflow;
+        buildingCapped = true;
+      } else {
+        finalBuildingGain[resourceKey] = baseAmount;
+      }
+
+      totalGain[resourceKey] = (totalGain[resourceKey] || 0) + (finalBuildingGain[resourceKey] || 0);
+    }
+
+    perBuildingGain[b.id] = { gain: finalBuildingGain, building: b, capped: buildingCapped };
+
+    perBuildingDetail.push({
+      buildingId: b.id,
+      buildingType: b.type,
+      buildingName: BUILDINGS[b.type]?.name || b.type,
+      level: b.level,
+      baseProduction: { ...production },
+      finalGain: { ...finalBuildingGain },
+      capped: buildingCapped,
+    });
+  }
+
+  const updatedBuildings = state.buildings.map((b) => {
+    const entry = perBuildingGain[b.id];
+    if (!entry) return b;
+
+    const newStorage = { ...(b.storage || {}) };
+    const cap = getBuildingCapacityByType(b.type, b.level);
+
+    for (const [key, amount] of Object.entries(entry.gain)) {
+      const resourceKey = key as keyof Resources;
+      const current = newStorage[resourceKey] || 0;
+      const maxCap = cap[resourceKey] || 0;
+      if (maxCap > 0) {
+        newStorage[resourceKey] = Math.min(current + (amount as number), maxCap);
+      } else {
+        newStorage[resourceKey] = current + (amount as number);
+      }
+    }
+
+    return { ...b, storage: newStorage };
+  });
+
+  const finalResources: Partial<Resources> = {};
+  for (const [key, amount] of Object.entries(totalGain)) {
+    if ((amount as number) > 0.5) {
+      finalResources[key as keyof Resources] = Math.floor(amount as number);
+    }
+  }
+
+  if (Object.keys(cappedByStorage).length > 0) {
+    const cappedList = Object.entries(cappedByStorage)
+      .filter(([, v]) => (v as number) > 1)
+      .map(([k, v]) => `${k} ${Math.floor(v as number)}`)
+      .join(', ');
+    if (cappedList) {
+      warnings.push(`存储上限封顶，溢出资源：${cappedList}`);
+    }
+  }
+
+  const earnings: OfflineEarnings = {
+    resources: finalResources,
+    duration: offlineSeconds,
+    effectiveDuration: effectiveSeconds,
+    collected: false,
+    timestamp: now,
+    baseEfficiency: BASE_OFFLINE_EFFICIENCY,
+    timeDecayRate: decayRate,
+    buildingBonus: totalBuildingBonus,
+    totemBonus: totalTotemBonus,
+    governmentBonus: totalGovernmentBonus,
+    techBonus: totalTechBonus,
+    cappedByStorage,
+    perBuildingDetail,
+    warnings,
+  };
+
+  return { updatedBuildings, earnings };
+};
+
 const loadSave = (): GameState => {
   try {
     const saved = localStorage.getItem(SAVE_KEY);
@@ -659,65 +1014,36 @@ const loadSave = (): GameState => {
       }
 
       const now = Date.now();
-      const offlineMs = now - state.lastOnlineTime;
-      const offlineSeconds = Math.min(offlineMs / 1000, MAX_OFFLINE_HOURS * 3600);
-      
-      if (offlineSeconds > 60) {
-        const totalGain: Partial<Resources> = {};
-        const weatherEffects = calculateWeatherEffects(state.season, state.weather);
-        const perBuildingGain: Record<string, Partial<Resources>> = {};
-        
-        for (const b of state.buildings) {
-          if (b.isBuilding) continue;
-          const production = getBuildingProduction(b.type, b.level);
-          if (Object.keys(production).length === 0) continue;
 
-          perBuildingGain[b.id] = {};
-          const prodBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
-          const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
-          const totalProdBonus = 1 + prodBonus + globalProdBonus;
+      const { state: repairedState, repairs } = repairCorruptedSave(state, now);
+      Object.assign(state, repairedState);
 
-          for (const [key, rate] of Object.entries(production)) {
-            const baseAmount = (rate as number) * offlineSeconds * totalProdBonus * OFFLINE_EFFICIENCY;
-            const weatherMod = weatherEffects.resourceModifiers[key as keyof Resources] || 0;
-            const amount = baseAmount * (1 + weatherMod);
-            perBuildingGain[b.id][key as keyof Resources] = amount;
-            totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
-          }
+      const { updatedBuildings, earnings } = calculateOfflineEarningsInternal(state, now);
+      state.buildings = updatedBuildings;
+      state.resources = calculateTotalResources(state.buildings);
+
+      if (earnings) {
+        if (repairs.length > 0) {
+          earnings.warnings = [...repairs, ...earnings.warnings];
         }
-
-        state.buildings = state.buildings.map((b) => {
-          const gain = perBuildingGain[b.id];
-          if (!gain) return b;
-          const newStorage = { ...(b.storage || {}) };
-          const cap = getBuildingCapacityByType(b.type, b.level);
-          for (const [key, amount] of Object.entries(gain)) {
-            const current = newStorage[key as keyof Resources] || 0;
-            const maxCap = cap[key as keyof Resources] || 0;
-            if (maxCap > 0) {
-              newStorage[key as keyof Resources] = Math.min(current + (amount as number), maxCap);
-            }
-          }
-          return { ...b, storage: newStorage };
-        });
-
-        state.resources = calculateTotalResources(state.buildings);
-
-        const finalGain: Partial<Resources> = {};
-        for (const [key, amount] of Object.entries(totalGain)) {
-          if ((amount as number) > 0.5) {
-            finalGain[key as keyof Resources] = Math.floor(amount as number);
-          }
-        }
-
-        if (Object.keys(finalGain).length > 0) {
-          state.offlineEarnings = {
-            resources: finalGain,
-            duration: offlineSeconds,
-            collected: false,
-            timestamp: now,
-          };
-        }
+        state.offlineEarnings = earnings;
+      } else if (repairs.length > 0) {
+        state.offlineEarnings = {
+          resources: {},
+          duration: 0,
+          effectiveDuration: 0,
+          collected: false,
+          timestamp: now,
+          baseEfficiency: BASE_OFFLINE_EFFICIENCY,
+          timeDecayRate: 1,
+          buildingBonus: 0,
+          totemBonus: 0,
+          governmentBonus: 0,
+          techBonus: 0,
+          cappedByStorage: {},
+          perBuildingDetail: [],
+          warnings: repairs,
+        };
       }
 
       state.lastOnlineTime = now;
@@ -3955,7 +4281,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     if (!state.offlineEarnings || state.offlineEarnings.collected) return false;
 
-    state.addResources(state.offlineEarnings.resources);
     set({
       offlineEarnings: { ...state.offlineEarnings, collected: true },
     });

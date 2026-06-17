@@ -47,6 +47,13 @@ export interface BuildingConfig {
   requirements?: BuildingRequirement[];
   buildTime: number;
   upgradeTime: number;
+  effects?: BuildingEffect[];
+}
+
+export interface BuildingEffect {
+  type: string;
+  target?: string;
+  value?: number;
 }
 
 export type BuildQueueItemType = 'build' | 'upgrade';
@@ -122,8 +129,28 @@ export interface SpoilageEvent {
 export interface OfflineEarnings {
   resources: Partial<Resources>;
   duration: number;
+  effectiveDuration: number;
   collected: boolean;
   timestamp: number;
+  baseEfficiency: number;
+  timeDecayRate: number;
+  buildingBonus: number;
+  totemBonus: number;
+  governmentBonus: number;
+  techBonus: number;
+  cappedByStorage: Partial<Resources>;
+  perBuildingDetail: OfflineBuildingDetail[];
+  warnings: string[];
+}
+
+export interface OfflineBuildingDetail {
+  buildingId: string;
+  buildingType: string;
+  buildingName: string;
+  level: number;
+  baseProduction: Partial<Resources>;
+  finalGain: Partial<Resources>;
+  capped: boolean;
 }
 
 export interface Building {

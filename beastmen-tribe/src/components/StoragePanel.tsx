@@ -67,10 +67,18 @@ export function StoragePanel({ onClose }: Props) {
   };
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
+    if (hours > 0) {
+      return `${hours}小时${mins}分`;
+    }
     return `${mins}分${secs}秒`;
   };
+
+  const formatPct = (v: number) => `${(v * 100).toFixed(0)}%`;
+
+  const [showOfflineDetail, setShowOfflineDetail] = useState(false);
 
   const handleStartTransport = () => {
     if (!fromBuildingId || !toBuildingId) return;
@@ -112,15 +120,122 @@ export function StoragePanel({ onClose }: Props) {
           <div className="offline-title">💤 离线收益</div>
           <div className="offline-duration">
             离线时长：{formatTime(offlineEarnings.duration)}
+            {offlineEarnings.duration !== offlineEarnings.effectiveDuration && (
+              <span className="offline-sub-info">（有效：{formatTime(offlineEarnings.effectiveDuration)}）</span>
+            )}
           </div>
-          <div className="offline-resources">
-            {Object.entries(offlineEarnings.resources).map(([key, amount]) => (
-              <span key={key} className="offline-resource-item">
-                {RESOURCE_INFO[key as keyof typeof RESOURCE_INFO].icon}
-                +{Math.floor(amount as number)}
+
+          <div className="offline-meta">
+            <span className="meta-item" title="基础离线效率">
+              效率 {formatPct(offlineEarnings.baseEfficiency)}
+            </span>
+            {offlineEarnings.timeDecayRate < 1 && (
+              <span className="meta-item meta-warn" title="超过阈值后时间衰减">
+                ⏳衰减 {formatPct(offlineEarnings.timeDecayRate)}
               </span>
-            ))}
+            )}
+            {offlineEarnings.techBonus > 0 && (
+              <span className="meta-item meta-good" title="科技加成">
+                🔬+{formatPct(offlineEarnings.techBonus)}
+              </span>
+            )}
+            {offlineEarnings.totemBonus > 0 && (
+              <span className="meta-item meta-good" title="图腾加成">
+                🗿+{formatPct(offlineEarnings.totemBonus)}
+              </span>
+            )}
+            {offlineEarnings.governmentBonus > 0 && (
+              <span className="meta-item meta-good" title="政府加成">
+                👑+{formatPct(offlineEarnings.governmentBonus)}
+              </span>
+            )}
+            {offlineEarnings.buildingBonus > 0 && (
+              <span className="meta-item meta-good" title="建筑特效加成">
+                🏗️+{formatPct(offlineEarnings.buildingBonus)}
+              </span>
+            )}
           </div>
+
+          <div className="offline-resources">
+            {Object.entries(offlineEarnings.resources).length === 0 ? (
+              <span className="offline-empty">（无资源收益）</span>
+            ) : (
+              Object.entries(offlineEarnings.resources).map(([key, amount]) => (
+                <span key={key} className="offline-resource-item">
+                  {RESOURCE_INFO[key as keyof typeof RESOURCE_INFO].icon}
+                  +{Math.floor(amount as number)}
+                </span>
+              ))
+            )}
+          </div>
+
+          {Object.keys(offlineEarnings.cappedByStorage || {}).length > 0 && (
+            <div className="offline-capped">
+              ⚠️ 存储封顶溢出：
+              {Object.entries(offlineEarnings.cappedByStorage)
+                .filter(([, v]) => (v as number) > 1)
+                .map(([k, v]) => (
+                  <span key={k} className="capped-item">
+                    {RESOURCE_INFO[k as keyof typeof RESOURCE_INFO]?.icon || ''}
+                    -{Math.floor(v as number)}
+                  </span>
+                ))}
+            </div>
+          )}
+
+          {offlineEarnings.warnings && offlineEarnings.warnings.length > 0 && (
+            <div className="offline-warnings-block">
+              <button
+                className="btn btn-small btn-warn"
+                onClick={() => setShowOfflineDetail(!showOfflineDetail)}
+              >
+                {showOfflineDetail ? '收起' : '展开'} {offlineEarnings.warnings.length} 条提示
+              </button>
+              {showOfflineDetail && (
+                <ul className="offline-warnings-list">
+                  {offlineEarnings.warnings.map((w, i) => (
+                    <li key={i} className="warning-item">ℹ️ {w}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {offlineEarnings.perBuildingDetail && offlineEarnings.perBuildingDetail.length > 0 && (
+            <div className="offline-detail-section">
+              <button
+                className="btn btn-small btn-secondary"
+                onClick={() => setShowOfflineDetail(!showOfflineDetail)}
+              >
+                {showOfflineDetail ? '收起明细' : '查看建筑明细'}
+              </button>
+              {showOfflineDetail && (
+                <div className="offline-building-detail">
+                  {offlineEarnings.perBuildingDetail.map((d) => (
+                    <div key={d.buildingId} className={`detail-row ${d.capped ? 'capped' : ''}`}>
+                      <span className="detail-name">
+                        {BUILDING_ICONS[d.buildingType] || '🏠'} {d.buildingName} Lv.{d.level}
+                        {d.capped && <span className="cap-tag" title="已达存储上限">📦</span>}
+                      </span>
+                      <span className="detail-gain">
+                        {Object.entries(d.finalGain).length === 0 ? (
+                          <span className="no-gain">—</span>
+                        ) : (
+                          Object.entries(d.finalGain).map(([k, v]) => (
+                            <span key={k} className="detail-gain-item">
+                              {RESOURCE_INFO[k as keyof typeof RESOURCE_INFO]?.icon || ''}
+                              +{Math.floor(v as number)}
+                            </span>
+                          ))
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             className="btn btn-primary"
             onClick={collectOfflineEarnings}

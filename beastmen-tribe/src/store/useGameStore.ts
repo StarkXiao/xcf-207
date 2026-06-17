@@ -120,6 +120,20 @@ import {
   getPoliciesByCategory,
   getChiefTitleByTrait,
 } from '../data/government';
+import {
+  createInitialPriceFluctuations,
+  getInitialTradeRoutes,
+  RISK_EVENTS,
+  getRiskChance,
+  generateBlackMarketOffer,
+  calculateRoutePriceBonus,
+  NEGOTIATION_CONFIG,
+  CARAVAN_CONFIG,
+} from '../data/caravans';
+import {
+  refreshStocks,
+  updatePriceFluctuations,
+} from '../data/trades';
 import type {
   ResourceType,
   ResourceCapacity,
@@ -134,6 +148,15 @@ import type {
   Trap,
   NightRaid,
   NightRaidReport,
+  TradeRoute,
+  Caravan,
+  CaravanStatus,
+  RiskEvent,
+  BlackMarketOffer,
+  PriceFluctuation,
+  NegotiationState,
+  CaravanLogEntry,
+  RouteDifficulty,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -454,6 +477,7 @@ const createInitialState = (): GameState => {
     },
   ];
 
+  const initialFactions = createInitialFactions();
   return {
     tribeName: '血牙部落',
     day: 1,
@@ -468,7 +492,7 @@ const createInitialState = (): GameState => {
     warriors: [],
     trainingQueue: [],
     invasion: null,
-    trades: generateTrades(6),
+    trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1),
     unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall', 'totem_altar'],
     unlockedWarriors: ['grunt'],
     selectedBuildingId: null,
@@ -498,7 +522,7 @@ const createInitialState = (): GameState => {
     weather: 'sunny',
     seasonProgress: 0,
     weatherDuration: getWeatherDuration('sunny'),
-    factions: createInitialFactions(),
+    factions: initialFactions,
     activeDiplomaticEvents: [],
     diplomaticEventCooldown: getDiplomaticEventInterval(),
     allyReinforcements: [],
@@ -507,6 +531,17 @@ const createInitialState = (): GameState => {
     totem: createInitialTotemState(),
     nightRaid: createInitialNightRaidState(),
     government: createInitialGovernmentState(1),
+    tradeRoutes: getInitialTradeRoutes(1, initialFactions),
+    caravans: [],
+    caravanLogs: [],
+    blackMarketOffers: [],
+    priceFluctuations: createInitialPriceFluctuations(),
+    currentNegotiation: null,
+    lastStockRefresh: Date.now(),
+    stockRefreshInterval: 90,
+    caravanCooldown: 0,
+    activeCaravanCount: 0,
+    maxCaravans: 1,
   };
 };
 
@@ -839,6 +874,27 @@ interface GameStore extends GameState {
   saveGame: () => void;
   resetGame: () => void;
   setTribeName: (name: string) => void;
+
+  startCaravan: (routeId: string, cargo: Partial<Record<ResourceType, number>>, warriorIds: string[]) => { success: boolean; message: string };
+  cancelCaravan: (caravanId: string) => boolean;
+  resolveCaravanRisk: (caravanId: string, fight: boolean) => { success: boolean; message: string };
+  processCaravanTick: (delta: number) => void;
+  addCaravanLog: (caravanId: string, message: string, type: 'info' | 'success' | 'warning' | 'danger') => void;
+
+  startNegotiation: (tradeId: string) => boolean;
+  attemptNegotiation: (aggressive: boolean) => { success: boolean; message: string; newModifier?: number };
+  cancelNegotiation: () => void;
+
+  acceptBlackMarketOffer: (offerId: string) => { success: boolean; message: string };
+  refreshBlackMarket: () => boolean;
+  processBlackMarketTick: (delta: number) => void;
+
+  processPriceFluctuationTick: (delta: number) => void;
+  processStockRefreshTick: (delta: number) => void;
+
+  unlockTradeRoute: (routeId: string) => boolean;
+  getMaxCaravans: () => number;
+  getCargoCapacity: () => number;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -1491,7 +1547,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.resources.gold < 20) return;
     state.spendResources({ gold: 20 });
     const weatherEffects = state.getWeatherEffects();
-    set({ trades: generateTrades(6, weatherEffects.tradeModifier, state.factions) });
+    set({ 
+      trades: generateTrades(6, weatherEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day)),
+      lastStockRefresh: Date.now(),
+    });
   },
 
   applyEventEffects: (effects) => {
@@ -4658,6 +4717,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processNightRaidTick(delta);
     state.processPolicyResearch(delta);
     state.processGovernmentTick(delta);
+    state.processCaravanTick(delta);
+    state.processBlackMarketTick(delta);
+    state.processPriceFluctuationTick(delta);
+    state.processStockRefreshTick(delta);
 
     const ending = state.checkForEnding();
     if (ending) {
@@ -4689,7 +4752,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
             perSecond: getFaithPerSecond(newBuildings, state.totem.unlockedTotems),
           },
         },
+        maxCaravans: get().getMaxCaravans(),
       });
+    }
+
+    const newRoutes = state.tradeRoutes.map((route) => {
+      if (route.unlocked) return route;
+      const faction = route.destinationFaction ? state.factions[route.destinationFaction] : null;
+      const reputation = faction?.reputation ?? 0;
+      const unlocked = state.day >= route.unlockDay && 
+        (!route.requiredReputation || reputation >= route.requiredReputation);
+      return unlocked ? { ...route, unlocked: true } : route;
+    });
+
+    if (newRoutes.some((r, i) => r.unlocked !== state.tradeRoutes[i].unlocked)) {
+      set({ tradeRoutes: newRoutes });
     }
 
     let newInvasion = state.invasion;
@@ -4728,6 +4805,620 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setTribeName: (name) => set({ tribeName: name }),
+
+  getMaxCaravans: () => {
+    const state = get();
+    const caravanseraiCount = state.buildings.filter(
+      (b) => b.type === 'caravanserai' && !b.isBuilding
+    ).length;
+    return CARAVAN_CONFIG.maxCaravansBase + caravanseraiCount * CARAVAN_CONFIG.maxCaravansPerCaravanserai;
+  },
+
+  getCargoCapacity: () => {
+    const state = get();
+    const caravanseraiLevel = state.buildings
+      .filter((b) => b.type === 'caravanserai' && !b.isBuilding)
+      .reduce((max, b) => Math.max(max, b.level), 0);
+    return CARAVAN_CONFIG.baseCargoCapacity + caravanseraiLevel * CARAVAN_CONFIG.caravanseraiCapacityBonus;
+  },
+
+  startCaravan: (routeId, cargo, warriorIds) => {
+    const state = get();
+    const route = state.tradeRoutes.find((r) => r.id === routeId);
+    
+    if (!route || !route.unlocked) {
+      return { success: false, message: '该贸易路线未解锁' };
+    }
+
+    if (state.activeCaravanCount >= state.getMaxCaravans()) {
+      return { success: false, message: '已达最大商队数量' };
+    }
+
+    if (warriorIds.length < CARAVAN_CONFIG.baseWarriorRequirement) {
+      return { success: false, message: `至少需要${CARAVAN_CONFIG.baseWarriorRequirement}名战士护送` };
+    }
+
+    const totalCargo = Object.values(cargo).reduce((sum, v) => sum + (v || 0), 0);
+    if (totalCargo === 0) {
+      return { success: false, message: '请选择要运送的货物' };
+    }
+
+    if (totalCargo > state.getCargoCapacity()) {
+      return { success: false, message: '超出货物容量' };
+    }
+
+    for (const [resource, amount] of Object.entries(cargo)) {
+      if (amount && amount > 0) {
+        if (state.resources[resource as keyof Resources] < amount) {
+          return { success: false, message: `${resource}资源不足` };
+        }
+      }
+    }
+
+    for (const [resource, amount] of Object.entries(cargo)) {
+      if (amount && amount > 0) {
+        state.spendResources({ [resource]: amount });
+      }
+    }
+
+    const caravan: Caravan = {
+      id: generateId(),
+      name: `商队-${Date.now()}`,
+      routeId,
+      status: 'traveling',
+      cargo,
+      gold: 0,
+      warriorIds,
+      progress: 0,
+      totalTime: route.travelTime,
+      startedAt: Date.now(),
+      currentRisk: null,
+      riskResolved: false,
+      profit: {},
+      log: [`🚚 商队出发前往${route.destination}`],
+    };
+
+    const logEntry: CaravanLogEntry = {
+      id: generateId(),
+      caravanId: caravan.id,
+      timestamp: Date.now(),
+      day: Math.floor(state.day),
+      message: `商队出发前往${route.destination}`,
+      type: 'info',
+    };
+
+    set({
+      caravans: [...state.caravans, caravan],
+      caravanLogs: [...state.caravanLogs, logEntry],
+      activeCaravanCount: state.activeCaravanCount + 1,
+    });
+
+    return { success: true, message: `商队已出发前往${route.destination}` };
+  },
+
+  cancelCaravan: (caravanId) => {
+    const state = get();
+    const caravan = state.caravans.find((c) => c.id === caravanId);
+    
+    if (!caravan || caravan.status !== 'traveling') {
+      return false;
+    }
+
+    const refundRatio = 0.5 + (1 - caravan.progress / caravan.totalTime) * 0.5;
+    const refund: Partial<Resources> = {};
+    for (const [resource, amount] of Object.entries(caravan.cargo)) {
+      if (amount) {
+        refund[resource as keyof Resources] = Math.floor(amount * refundRatio);
+      }
+    }
+    state.addResources(refund);
+
+    const logEntry: CaravanLogEntry = {
+      id: generateId(),
+      caravanId,
+      timestamp: Date.now(),
+      day: Math.floor(state.day),
+      message: '商队中途返回，部分货物损失',
+      type: 'warning',
+    };
+
+    set({
+      caravans: state.caravans.filter((c) => c.id !== caravanId),
+      caravanLogs: [...state.caravanLogs, logEntry],
+      activeCaravanCount: state.activeCaravanCount - 1,
+    });
+
+    return true;
+  },
+
+  resolveCaravanRisk: (caravanId, fight) => {
+    const state = get();
+    const caravan = state.caravans.find((c) => c.id === caravanId);
+    
+    if (!caravan || !caravan.currentRisk || caravan.riskResolved) {
+      return { success: false, message: '没有待处理的风险事件' };
+    }
+
+    const risk = caravan.currentRisk;
+    let message = '';
+    const log: string[] = [...caravan.log];
+    const newCargo = { ...caravan.cargo };
+    let newProfit = { ...caravan.profit };
+    let newGold = caravan.gold;
+    let newWarriorIds = [...caravan.warriorIds];
+
+    if (fight) {
+      const winChance = 0.4 + (caravan.warriorIds.length * 0.1);
+      const won = Math.random() < winChance;
+      
+      if (won) {
+        message = `${risk.icon} 成功击退${risk.name}！`;
+        log.push(`⚔️ ${message}`);
+        const lootGold = Math.floor(Math.random() * 50) + 20;
+        newGold += lootGold;
+        log.push(`💰 获得${lootGold}金币作为战利品`);
+      } else {
+        message = `${risk.icon} 未能击退${risk.name}，损失惨重！`;
+        log.push(`💔 ${message}`);
+        for (const [resource, lossPercent] of Object.entries(risk.resourceLossPercent)) {
+          const current = newCargo[resource as ResourceType] || 0;
+          const loss = Math.floor(current * lossPercent);
+          newCargo[resource as ResourceType] = current - loss;
+          log.push(`📉 损失${loss}单位${resource}`);
+        }
+        newGold = Math.max(0, newGold - risk.goldLoss);
+        if (Math.random() < risk.warriorCasualtyChance && newWarriorIds.length > 0) {
+          const casualtyIndex = Math.floor(Math.random() * newWarriorIds.length);
+          const casualtyId = newWarriorIds[casualtyIndex];
+          newWarriorIds.splice(casualtyIndex, 1);
+          set({ warriors: state.warriors.filter((w) => w.id !== casualtyId) });
+          log.push(`☠️ 一名战士在战斗中牺牲`);
+        }
+      }
+    } else {
+      message = `${risk.icon} 选择规避${risk.name}，缴纳过路费`;
+      log.push(`🚶 ${message}`);
+      const toll = Math.floor(risk.goldLoss * 0.8);
+      newGold = Math.max(0, newGold - toll);
+      log.push(`💸 支付${toll}金币过路费`);
+      if (risk.reputationChange < 0 && caravan.warriorIds.length > 0) {
+        const casualtyChance = risk.warriorCasualtyChance * 0.5;
+        if (Math.random() < casualtyChance) {
+          const casualtyIndex = Math.floor(Math.random() * newWarriorIds.length);
+          const casualtyId = newWarriorIds[casualtyIndex];
+          newWarriorIds.splice(casualtyIndex, 1);
+          set({ warriors: state.warriors.filter((w) => w.id !== casualtyId) });
+          log.push(`☠️ 一名战士在规避途中受伤`);
+        }
+      }
+    }
+
+    const logEntry: CaravanLogEntry = {
+      id: generateId(),
+      caravanId,
+      timestamp: Date.now(),
+      day: Math.floor(state.day),
+      message,
+      type: fight ? (message.includes('成功') ? 'success' : 'danger') : 'warning',
+    };
+
+    const updatedCaravan = {
+      ...caravan,
+      cargo: newCargo,
+      profit: newProfit,
+      gold: newGold,
+      warriorIds: newWarriorIds,
+      currentRisk: null,
+      riskResolved: true,
+      log,
+    };
+
+    set({
+      caravans: state.caravans.map((c) => (c.id === caravanId ? updatedCaravan : c)),
+      caravanLogs: [...state.caravanLogs, logEntry],
+    });
+
+    return { success: true, message };
+  },
+
+  addCaravanLog: (caravanId, message, type) => {
+    const state = get();
+    const logEntry: CaravanLogEntry = {
+      id: generateId(),
+      caravanId,
+      timestamp: Date.now(),
+      day: Math.floor(state.day),
+      message,
+      type,
+    };
+    set({ caravanLogs: [...state.caravanLogs, logEntry] });
+  },
+
+  processCaravanTick: (delta) => {
+    const state = get();
+    const now = Date.now();
+    let updated = false;
+    const updatedCaravans: Caravan[] = [];
+
+    for (const caravan of state.caravans) {
+      if (caravan.status === 'completed' || caravan.status === 'failed') {
+        updatedCaravans.push(caravan);
+        continue;
+      }
+
+      if (caravan.currentRisk) {
+        updatedCaravans.push(caravan);
+        continue;
+      }
+
+      const route = state.tradeRoutes.find((r) => r.id === caravan.routeId);
+      if (!route) {
+        updatedCaravans.push(caravan);
+        continue;
+      }
+
+      let newProgress = caravan.progress + delta;
+      const newLog = [...caravan.log];
+      let newStatus = caravan.status;
+      let newRisk = caravan.currentRisk;
+      let newRiskResolved = caravan.riskResolved;
+      let newProfit = { ...caravan.profit };
+      let newCargo = { ...caravan.cargo };
+      let newGold = caravan.gold;
+
+      const midPoint = caravan.totalTime * 0.5;
+      const nearMidPoint = newProgress >= midPoint && caravan.progress < midPoint;
+      
+      if (nearMidPoint && !newRiskResolved && route.riskEvents.length > 0) {
+        const hasCaravanserai = state.buildings.some(
+          (b) => b.type === 'caravanserai' && !b.isBuilding
+        );
+        
+        for (const riskEventId of route.riskEvents) {
+          const riskEvent = RISK_EVENTS[riskEventId];
+          if (!riskEvent) continue;
+          
+          const chance = getRiskChance(
+            riskEvent,
+            route.difficulty,
+            hasCaravanserai,
+            caravan.warriorIds.length
+          );
+          
+          if (Math.random() < chance) {
+            newRisk = riskEvent;
+            newLog.push(`⚠️ 遭遇${riskEvent.icon} ${riskEvent.name}！`);
+            const logEntry: CaravanLogEntry = {
+              id: generateId(),
+              caravanId: caravan.id,
+              timestamp: now,
+              day: Math.floor(state.day),
+              message: `遭遇${riskEvent.name}`,
+              type: 'danger',
+            };
+            set({ caravanLogs: [...state.caravanLogs, logEntry] });
+            updated = true;
+            break;
+          }
+        }
+      }
+
+      if (newProgress >= caravan.totalTime && newStatus === 'traveling') {
+        newStatus = 'trading';
+        newLog.push(`📍 到达${route.destination}，开始交易`);
+        
+        const priceBonus = calculateRoutePriceBonus(route, state.priceFluctuations, state.factions);
+        for (const [resource, amount] of Object.entries(newCargo)) {
+          if (amount && amount > 0) {
+            const isDemand = route.resourceDemand.includes(resource as ResourceType);
+            const sellBonus = isDemand ? (1 + priceBonus + 0.2) : (1 + priceBonus);
+            const goldValue = Math.floor(amount * 5 * sellBonus);
+            newGold += goldValue;
+            newProfit.gold = (newProfit.gold || 0) + goldValue;
+            newLog.push(`💰 出售${amount}${resource}，获得${goldValue}金币`);
+          }
+        }
+        newCargo = {};
+
+        for (const supplyResource of route.resourceSupply) {
+          const buyPrice = 5 * (1 - priceBonus * 0.5);
+          const buyAmount = Math.floor(newGold / buyPrice * 0.6);
+          if (buyAmount > 0) {
+            const cost = Math.floor(buyAmount * buyPrice);
+            newGold -= cost;
+            newCargo[supplyResource] = (newCargo[supplyResource] || 0) + buyAmount;
+            newLog.push(`📦 购买${buyAmount}${supplyResource}，花费${cost}金币`);
+          }
+        }
+
+        newProgress = 0;
+        const newTotalTime = route.travelTime;
+        newStatus = 'returning';
+        newLog.push(`🔄 启程返回部落`);
+      }
+
+      if (newStatus === 'returning' && newProgress >= newTotalTime) {
+        newStatus = 'completed';
+        newLog.push(`🏠 商队返回部落，交易完成！`);
+        
+        for (const [resource, amount] of Object.entries(newCargo)) {
+          if (amount && amount > 0) {
+            state.addResources({ [resource]: amount });
+            newLog.push(`📥 卸货${amount}${resource}`);
+          }
+        }
+        if (newGold > 0) {
+          state.addResources({ gold: newGold });
+          newLog.push(`💰 入账${newGold}金币`);
+        }
+
+        const logEntry: CaravanLogEntry = {
+          id: generateId(),
+          caravanId: caravan.id,
+          timestamp: now,
+          day: Math.floor(state.day),
+          message: '商队完成交易返回',
+          type: 'success',
+        };
+        set({
+          caravanLogs: [...state.caravanLogs, logEntry],
+          activeCaravanCount: state.activeCaravanCount - 1,
+        });
+      }
+
+      updatedCaravans.push({
+        ...caravan,
+        progress: newProgress,
+        status: newStatus,
+        log: newLog,
+        currentRisk: newRisk,
+        riskResolved: newRiskResolved,
+        profit: newProfit,
+        cargo: newCargo,
+        gold: newGold,
+      });
+      updated = true;
+    }
+
+    if (updated) {
+      set({ caravans: updatedCaravans });
+    }
+  },
+
+  startNegotiation: (tradeId) => {
+    const state = get();
+    if (state.currentNegotiation) return false;
+    
+    const trade = state.trades.find((t) => t.id === tradeId);
+    if (!trade || trade.stock <= 0) return false;
+
+    const negotiation: NegotiationState = {
+      tradeId,
+      attempts: 0,
+      maxAttempts: NEGOTIATION_CONFIG.maxAttempts,
+      currentModifier: trade.currentPriceMultiplier,
+      opponentMood: 0.8,
+      successThreshold: NEGOTIATION_CONFIG.baseSuccessChance,
+    };
+
+    set({ currentNegotiation: negotiation });
+    return true;
+  },
+
+  attemptNegotiation: (aggressive) => {
+    const state = get();
+    const negotiation = state.currentNegotiation;
+    if (!negotiation) {
+      return { success: false, message: '没有进行中的议价' };
+    }
+
+    if (negotiation.attempts >= negotiation.maxAttempts) {
+      return { success: false, message: '议价次数已用完' };
+    }
+
+    const trade = state.trades.find((t) => t.id === negotiation.tradeId);
+    if (!trade) {
+      return { success: false, message: '交易不存在' };
+    }
+
+    const successChance = negotiation.successThreshold * negotiation.opponentMood * (aggressive ? 0.8 : 1.2);
+    const success = Math.random() < successChance;
+    
+    const improvement = NEGOTIATION_CONFIG.minPriceImprovement + 
+      Math.random() * (NEGOTIATION_CONFIG.maxPriceImprovement - NEGOTIATION_CONFIG.minPriceImprovement);
+    
+    let newModifier = negotiation.currentModifier;
+    let message = '';
+
+    if (success) {
+      if (trade.type === 'buy') {
+        newModifier = Math.max(0.5, newModifier * (1 - improvement));
+        message = `🎉 议价成功！价格降低${Math.round(improvement * 100)}%`;
+      } else {
+        newModifier = Math.min(2.0, newModifier * (1 + improvement));
+        message = `🎉 议价成功！价格提高${Math.round(improvement * 100)}%`;
+      }
+    } else {
+      message = aggressive ? '😤 对方被激怒了，拒绝继续议价' : '😐 对方不为所动';
+    }
+
+    const newMood = negotiation.opponentMood - NEGOTIATION_CONFIG.moodDecayPerAttempt * (aggressive ? 1.5 : 1);
+    
+    const updatedNegotiation: NegotiationState = {
+      ...negotiation,
+      attempts: negotiation.attempts + 1,
+      currentModifier: newModifier,
+      opponentMood: Math.max(0.1, newMood),
+      successThreshold: negotiation.successThreshold * (aggressive ? 0.9 : 1.05),
+    };
+
+    const updatedTrades = state.trades.map((t) => {
+      if (t.id === trade.id) {
+        const ratioDiff = newModifier / t.currentPriceMultiplier;
+        return {
+          ...t,
+          currentPriceMultiplier: newModifier,
+          give: {
+            ...t.give,
+            amount: Math.floor(t.give.amount * (trade.type === 'sell' ? ratioDiff : 1)),
+          },
+          receive: {
+            ...t.receive,
+            amount: Math.floor(t.receive.amount * (trade.type === 'buy' ? (1 / ratioDiff) : 1)),
+          },
+        };
+      }
+      return t;
+    });
+
+    set({
+      currentNegotiation: success && negotiation.attempts + 1 < negotiation.maxAttempts ? updatedNegotiation : null,
+      trades: updatedTrades,
+    });
+
+    return { success, message, newModifier };
+  },
+
+  cancelNegotiation: () => {
+    set({ currentNegotiation: null });
+  },
+
+  acceptBlackMarketOffer: (offerId) => {
+    const state = get();
+    const offer = state.blackMarketOffers.find((o) => o.id === offerId);
+    if (!offer || offer.isDiscovered) {
+      return { success: false, message: '该黑市交易不可用' };
+    }
+
+    const trade = offer.tradeOffer;
+    if (trade.stock <= 0) {
+      return { success: false, message: '库存不足' };
+    }
+
+    if (state.resources[trade.give.resource] < trade.give.amount) {
+      return { success: false, message: '资源不足' };
+    }
+
+    const detected = Math.random() < offer.detectionChance;
+    
+    state.spendResources({ [trade.give.resource]: trade.give.amount });
+    state.addResources({ [trade.receive.resource]: trade.receive.amount });
+
+    if (detected) {
+      offer.isDiscovered = true;
+      for (const faction of Object.values(state.factions)) {
+        if (faction.stance === 'friendly' || faction.stance === 'ally') {
+          state.changeFactionReputation(faction.id, -offer.reputationPenalty);
+        }
+      }
+      set({
+        blackMarketOffers: state.blackMarketOffers.map((o) =>
+          o.id === offerId ? { ...o, isDiscovered: true } : o
+        ),
+      });
+      return { success: true, message: `交易完成，但被发现！声望下降${offer.reputationPenalty}` };
+    }
+
+    set({
+      blackMarketOffers: state.blackMarketOffers.map((o) =>
+        o.id === offerId
+          ? { ...o, tradeOffer: { ...trade, stock: trade.stock - 1 } }
+          : o
+      ),
+    });
+
+    return { success: true, message: '黑市交易成功完成' };
+  },
+
+  refreshBlackMarket: () => {
+    const state = get();
+    const cost = 30;
+    if (state.resources.gold < cost) {
+      return false;
+    }
+
+    state.spendResources({ gold: cost });
+    const offers = [];
+    for (let i = 0; i < 3; i++) {
+      offers.push(generateBlackMarketOffer(state.priceFluctuations, Math.floor(state.day)));
+    }
+
+    set({ blackMarketOffers: offers });
+    return true;
+  },
+
+  processBlackMarketTick: (delta) => {
+    const state = get();
+    const now = Date.now();
+    
+    const validOffers = state.blackMarketOffers.filter(
+      (o) => !o.isDiscovered && now < o.expiresAt && o.tradeOffer.stock > 0
+    );
+
+    if (validOffers.length !== state.blackMarketOffers.length) {
+      set({ blackMarketOffers: validOffers });
+    }
+
+    if (validOffers.length === 0 && Math.random() < 0.001 * delta) {
+      const offers = [];
+      for (let i = 0; i < 2; i++) {
+        offers.push(generateBlackMarketOffer(state.priceFluctuations, Math.floor(state.day)));
+      }
+      set({ blackMarketOffers: offers });
+    }
+  },
+
+  processPriceFluctuationTick: (delta) => {
+    const state = get();
+    const now = Date.now();
+    const updated = updatePriceFluctuations(state.priceFluctuations, now);
+    
+    let changed = false;
+    for (const resource of Object.keys(updated) as ResourceType[]) {
+      if (updated[resource].currentMultiplier !== state.priceFluctuations[resource].currentMultiplier) {
+        changed = true;
+        break;
+      }
+    }
+
+    if (changed) {
+      set({ priceFluctuations: updated });
+    }
+  },
+
+  processStockRefreshTick: (delta) => {
+    const state = get();
+    const now = Date.now();
+    const timeSinceRefresh = now - state.lastStockRefresh;
+    const intervalMs = state.stockRefreshInterval * 1000;
+
+    if (timeSinceRefresh >= intervalMs) {
+      const refreshedTrades = refreshStocks(state.trades);
+      set({
+        trades: refreshedTrades,
+        lastStockRefresh: now,
+      });
+    }
+  },
+
+  unlockTradeRoute: (routeId) => {
+    const state = get();
+    const route = state.tradeRoutes.find((r) => r.id === routeId);
+    if (!route || route.unlocked) return false;
+
+    const faction = route.destinationFaction ? state.factions[route.destinationFaction] : null;
+    const reputation = faction?.reputation ?? 0;
+    
+    if (state.day < route.unlockDay) return false;
+    if (route.requiredReputation && reputation < route.requiredReputation) return false;
+
+    set({
+      tradeRoutes: state.tradeRoutes.map((r) =>
+        r.id === routeId ? { ...r, unlocked: true } : r
+      ),
+    });
+    return true;
+  },
 }));
 
 setInterval(() => {

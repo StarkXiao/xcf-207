@@ -106,12 +106,22 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
   caravanserai: {
     id: 'caravanserai',
     name: '商队驿站',
-    description: '提升运输效率，解锁建筑间资源转运功能',
+    description: '解锁商队长途贸易系统，提升货仓容量和最大商队数量',
     icon: '🐪',
     baseCost: { wood: 150, stone: 100, gold: 80 },
     maxLevel: 5,
     upgradeMultiplier: 1.8,
     requires: 'market',
+  },
+  smugglers_den: {
+    id: 'smugglers_den',
+    name: '走私者巢穴',
+    description: '解锁黑市交易系统，可进行高风险高回报的非法交易',
+    icon: '🌑',
+    baseCost: { wood: 200, stone: 150, gold: 150, iron: 50 },
+    maxLevel: 3,
+    upgradeMultiplier: 2.0,
+    requires: 'caravanserai',
   },
   totem_altar: {
     id: 'totem_altar',

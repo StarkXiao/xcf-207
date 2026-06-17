@@ -176,6 +176,103 @@ export interface TradeOffer {
   give: { resource: ResourceType; amount: number };
   receive: { resource: ResourceType; amount: number };
   stock: number;
+  basePrice: number;
+  currentPriceMultiplier: number;
+  isBlackMarket?: boolean;
+  factionId?: FactionType;
+  expiresAt?: number;
+  minReputation?: number;
+}
+
+export type RiskEventType = 'bandit_attack' | 'storm' | 'landslide' | 'beast_attack' | 'customs_check' | 'plague' | 'betrayal';
+export type RouteDifficulty = 'safe' | 'normal' | 'dangerous' | 'deadly';
+export type CaravanStatus = 'idle' | 'traveling' | 'trading' | 'returning' | 'completed' | 'failed';
+
+export interface RiskEvent {
+  id: RiskEventType;
+  name: string;
+  icon: string;
+  description: string;
+  baseChance: number;
+  resourceLossPercent: Partial<Record<ResourceType, number>>;
+  goldLoss: number;
+  warriorCasualtyChance: number;
+  reputationChange: number;
+  difficultyModifier: Partial<Record<RouteDifficulty, number>>;
+}
+
+export interface TradeRoute {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  destination: string;
+  destinationFaction?: FactionType;
+  distance: number;
+  travelTime: number;
+  difficulty: RouteDifficulty;
+  riskEvents: RiskEventType[];
+  resourceDemand: ResourceType[];
+  resourceSupply: ResourceType[];
+  priceBonus: number;
+  riskReductionBuilding?: BuildingType;
+  unlockDay: number;
+  requiredReputation?: number;
+  unlocked: boolean;
+}
+
+export interface Caravan {
+  id: string;
+  name: string;
+  routeId: string;
+  status: CaravanStatus;
+  cargo: Partial<Record<ResourceType, number>>;
+  gold: number;
+  warriorIds: string[];
+  progress: number;
+  totalTime: number;
+  startedAt: number;
+  currentRisk: RiskEvent | null;
+  riskResolved: boolean;
+  profit: Partial<Record<ResourceType, number>>;
+  log: string[];
+}
+
+export interface NegotiationState {
+  tradeId: string;
+  attempts: number;
+  maxAttempts: number;
+  currentModifier: number;
+  opponentMood: number;
+  successThreshold: number;
+}
+
+export interface BlackMarketOffer {
+  id: string;
+  tradeOffer: TradeOffer;
+  riskLevel: number;
+  detectionChance: number;
+  reputationPenalty: number;
+  expiresAt: number;
+  isDiscovered: boolean;
+}
+
+export interface PriceFluctuation {
+  resource: ResourceType;
+  currentMultiplier: number;
+  trend: 'rising' | 'falling' | 'stable';
+  volatility: number;
+  nextUpdateAt: number;
+  eventInfluence?: string;
+}
+
+export interface CaravanLogEntry {
+  id: string;
+  caravanId: string;
+  timestamp: number;
+  day: number;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'danger';
 }
 
 export type EventEffectType =
@@ -1081,4 +1178,15 @@ export interface GameState {
   totem: TotemState;
   nightRaid: NightRaidState;
   government: GovernmentState;
+  tradeRoutes: TradeRoute[];
+  caravans: Caravan[];
+  caravanLogs: CaravanLogEntry[];
+  blackMarketOffers: BlackMarketOffer[];
+  priceFluctuations: Record<ResourceType, PriceFluctuation>;
+  currentNegotiation: NegotiationState | null;
+  lastStockRefresh: number;
+  stockRefreshInterval: number;
+  caravanCooldown: number;
+  activeCaravanCount: number;
+  maxCaravans: number;
 }

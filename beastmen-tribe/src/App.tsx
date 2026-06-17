@@ -17,9 +17,10 @@ import { StoragePanel } from './components/StoragePanel';
 import { TotemPanel } from './components/TotemPanel';
 import { NightRaidPanel } from './components/NightRaidPanel';
 import { GovernmentPanel } from './components/GovernmentPanel';
+import { CaravanPanel } from './components/CaravanPanel';
 import './App.css';
 
-type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'nightRaid' | 'totem' | 'task' | 'trade' | 'storage' | 'diplomacy' | 'government' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'nightRaid' | 'totem' | 'task' | 'trade' | 'caravan' | 'storage' | 'diplomacy' | 'government' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'population', label: '人口', icon: '👥' },
@@ -32,6 +33,7 @@ const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'totem', label: '图腾', icon: '🗿' },
   { id: 'task', label: '委托', icon: '📜' },
   { id: 'trade', label: '交易', icon: '🏪' },
+  { id: 'caravan', label: '商队', icon: '🐪' },
   { id: 'storage', label: '仓储', icon: '📦' },
   { id: 'diplomacy', label: '外交', icon: '🤝' },
   { id: 'government', label: '政务', icon: '🏛️' },
@@ -91,6 +93,7 @@ function App() {
             {activeTab === 'totem' && <TotemPanel />}
             {activeTab === 'task' && <TaskPanel />}
             {activeTab === 'trade' && <TradePanel />}
+            {activeTab === 'caravan' && <CaravanPanel />}
             {activeTab === 'storage' && <StoragePanel onClose={() => {}} />}
             {activeTab === 'diplomacy' && <DiplomacyPanel />}
             {activeTab === 'government' && <GovernmentPanel />}

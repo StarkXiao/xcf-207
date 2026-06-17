@@ -87,26 +87,41 @@ export function GovernmentPanel() {
 
   const getRequirementText = (policyId: string) => {
     const config = getPolicyById(policyId);
-    if (!config?.requires) return [];
+    if (!config) return [];
 
     const reqs: string[] = [];
-    for (const req of config.requires) {
-      if (req.type === 'policy' && req.id) {
-        const reqConfig = getPolicyById(req.id);
-        const completed = isPolicyCompleted(req.id);
-        reqs.push(`${completed ? '✅' : '⬜'} 需要政策：${reqConfig?.name || req.id}`);
-      } else if (req.type === 'tier') {
-        const categoryPolicies = getPoliciesByCategory(config.category);
-        const completedInCategory = categoryPolicies.filter(
-          (p) => p.tier < config.tier && isPolicyCompleted(p.id)
-        ).length;
-        const needed = categoryPolicies.filter((p) => p.tier < config.tier).length;
-        reqs.push(
-          `${completedInCategory >= needed ? '✅' : '⬜'} 前置政策：${completedInCategory}/${needed}`
-        );
-      } else if (req.type === 'trait') {
-        const hasTrait = chief?.traits.some((t) => t.id === req.id);
-        reqs.push(`${hasTrait ? '✅' : '⬜'} 首领特质：${req.name}`);
+
+    if (config.tier > 1) {
+      const categoryPolicies = getPoliciesByCategory(config.category);
+      const lowerTierPolicies = categoryPolicies.filter((p) => p.tier < config.tier);
+      const completedInLower = lowerTierPolicies.filter((p) => isPolicyCompleted(p.id)).length;
+      const lowerTierRequired = Math.max(1, Math.ceil(lowerTierPolicies.length * 0.5));
+      const ok = completedInLower >= lowerTierRequired;
+      reqs.push(
+        `${ok ? '✅' : '⬜'} 完成${config.tier - 1}阶政策：${completedInLower}/${lowerTierRequired}`
+      );
+    }
+
+    if (config.requires) {
+      for (const req of config.requires) {
+        if (req.type === 'policy' && req.id) {
+          const reqConfig = getPolicyById(req.id);
+          const completed = isPolicyCompleted(req.id);
+          reqs.push(`${completed ? '✅' : '⬜'} 需要政策：${reqConfig?.name || req.id}`);
+        } else if (req.type === 'trait' && req.attribute && req.minValue) {
+          const chief = government.chieftain.current;
+          const attrValue = chief?.attributes?.[req.attribute] ?? 0;
+          const ok = attrValue >= req.minValue;
+          const attrName: Record<string, string> = {
+            martial: '军事', diplomacy: '外交', stewardship: '管理',
+            piety: '虔诚', cunning: '智谋', charisma: '魅力',
+          };
+          reqs.push(
+            `${ok ? '✅' : '⬜'} 首领${attrName[req.attribute] || req.attribute}≥${req.minValue}（当前${attrValue}）`
+          );
+        } else if (req.type === 'day' && req.minValue) {
+          reqs.push(`需要第${req.minValue}天之后`);
+        }
       }
     }
     return reqs;
@@ -455,7 +470,8 @@ export function GovernmentPanel() {
                       const completed = isPolicyCompleted(policy.id);
                       const researching = isPolicyResearching(policy.id);
                       const active = isPolicyActive(policy.id);
-                      const canStart = canResearchPolicy(policy.id);
+                      const canStartCheck = canResearchPolicy(policy.id);
+                      const canStart = canStartCheck.canResearch;
 
                       return (
                         <div
@@ -514,7 +530,9 @@ export function GovernmentPanel() {
                 const completed = isPolicyCompleted(selectedPolicy);
                 const researching = isPolicyResearching(selectedPolicy);
                 const active = isPolicyActive(selectedPolicy);
-                const canStart = canResearchPolicy(selectedPolicy);
+                const canStartCheck = canResearchPolicy(selectedPolicy);
+                const canStart = canStartCheck.canResearch;
+                const cannotReason = canStartCheck.reason;
                 const requirements = getRequirementText(selectedPolicy);
                 const effects = getEffectText(selectedPolicy);
                 const onCooldown = (government.policyCooldowns[selectedPolicy] || 0) > 0;
@@ -581,8 +599,9 @@ export function GovernmentPanel() {
                         className={`btn ${canStart ? 'btn-primary' : 'btn-disabled'}`}
                         onClick={() => canStart && startPolicyResearch(selectedPolicy)}
                         disabled={!canStart}
+                        title={cannotReason}
                       >
-                        {canStart ? '开始推行' : '条件不足'}
+                        {canStart ? '开始推行' : `条件不足 - ${cannotReason || '未知原因'}`}
                       </button>
                     )}
 

@@ -3909,6 +3909,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { canResearch: false, reason: `政策点不足（需要${policy.cost}）` };
     }
 
+    if (policy.tier > 1) {
+      const categoryPolicies = getPoliciesByCategory(policy.category);
+      const lowerTierPolicies = categoryPolicies.filter((p) => p.tier < policy.tier);
+      const completedInLower = lowerTierPolicies.filter((p) =>
+        state.government.completedPolicies.includes(p.id)
+      ).length;
+      const lowerTierRequired = Math.max(1, Math.ceil(lowerTierPolicies.length * 0.5));
+      if (completedInLower < lowerTierRequired) {
+        return {
+          canResearch: false,
+          reason: `需要完成${lowerTierRequired}项低阶政策（已完成${completedInLower}/${lowerTierPolicies.length}）`,
+        };
+      }
+    }
+
     if (policy.requires) {
       for (const req of policy.requires) {
         if (req.type === 'policy' && req.id) {

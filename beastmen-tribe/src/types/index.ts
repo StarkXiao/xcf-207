@@ -408,4 +408,50 @@ export interface GameState {
   taskRefreshInterval: number;
   totalChainsCompleted: number;
   totalChainsFailed: number;
+  season: SeasonType;
+  weather: WeatherType;
+  seasonProgress: number;
+  weatherDuration: number;
+}
+
+export type SeasonType = 'spring' | 'summer' | 'autumn' | 'winter';
+
+export type WeatherType = 'sunny' | 'rainy' | 'stormy' | 'snowy' | 'foggy' | 'drought';
+
+export interface SeasonConfig {
+  id: SeasonType;
+  name: string;
+  icon: string;
+  description: string;
+  duration: number;
+  color: string;
+  bgColor: string;
+  resourceModifiers: Partial<Record<ResourceType, number>>;
+  trainingSpeedModifier: number;
+  invasionModifier: number;
+  tradeModifier: number;
+  availableWeathers: WeatherType[];
+  weatherWeights: Partial<Record<WeatherType, number>>;
+}
+
+export interface WeatherConfig {
+  id: WeatherType;
+  name: string;
+  icon: string;
+  description: string;
+  minDuration: number;
+  maxDuration: number;
+  resourceModifiers: Partial<Record<ResourceType, number>>;
+  trainingSpeedModifier: number;
+  invasionModifier: number;
+  tradeModifier: number;
+  particleColor: number;
+  particleCount: number;
+}
+
+export interface WeatherEffects {
+  resourceModifiers: Partial<Record<ResourceType, number>>;
+  trainingSpeedModifier: number;
+  invasionModifier: number;
+  tradeModifier: number;
 }

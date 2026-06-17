@@ -21,6 +21,9 @@ import type {
   ActiveTask,
   TaskChain,
   TaskGoalType,
+  SeasonType,
+  WeatherType,
+  WeatherEffects,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -35,6 +38,13 @@ import {
 } from '../data/expedition';
 import { TECHNOLOGIES } from '../data/technologies';
 import { TASK_CONFIGS, TASK_REFRESH_INTERVAL, MAX_ACTIVE_CHAINS, selectRandomChains } from '../data/tasks';
+import {
+  SEASONS,
+  getNextSeason,
+  selectWeatherForSeason,
+  getWeatherDuration,
+  calculateCombinedEffects,
+} from '../data/weather';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
@@ -59,6 +69,13 @@ const calculateTechBonus = (
     }
   }
   return bonus;
+};
+
+const calculateWeatherEffects = (
+  season: SeasonType,
+  weather: WeatherType
+): WeatherEffects => {
+  return calculateCombinedEffects(season, weather);
 };
 
 const calculateWallDefense = (buildings: Building[], technologies: Tech[]): number => {
@@ -223,6 +240,10 @@ const createInitialState = (): GameState => ({
   taskRefreshInterval: TASK_REFRESH_INTERVAL,
   totalChainsCompleted: 0,
   totalChainsFailed: 0,
+  season: 'spring',
+  weather: 'sunny',
+  seasonProgress: 0,
+  weatherDuration: getWeatherDuration('sunny'),
 });
 
 const loadSave = (): GameState => {
@@ -257,6 +278,10 @@ const loadSave = (): GameState => {
       state.taskRefreshInterval = parsed.taskRefreshInterval ?? TASK_REFRESH_INTERVAL;
       state.totalChainsCompleted = parsed.totalChainsCompleted || 0;
       state.totalChainsFailed = parsed.totalChainsFailed || 0;
+      state.season = parsed.season || 'spring';
+      state.weather = parsed.weather || 'sunny';
+      state.seasonProgress = parsed.seasonProgress || 0;
+      state.weatherDuration = parsed.weatherDuration ?? getWeatherDuration(state.weather);
       if (state.taskChains.length > 0) {
         state.taskChains = state.taskChains.map((c) => ({
           ...c,
@@ -314,6 +339,11 @@ interface GameStore extends GameState {
   claimTaskStageReward: (chainId: string, taskId: string, stageIndex: number) => boolean;
   updateTaskProgress: (goalType: TaskGoalType, amount: number, target?: string) => void;
   claimChainReward: (chainId: string) => boolean;
+
+  processWeatherTick: (delta: number) => { seasonChanged: boolean; weatherChanged: boolean };
+  getWeatherEffects: () => WeatherEffects;
+  advanceSeason: () => void;
+  changeWeather: () => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -442,6 +472,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const now = Date.now();
     const totalGain: Partial<Resources> = {};
+    const weatherEffects = state.getWeatherEffects();
 
     const updatedBuildings = state.buildings.map((b) => {
       if (b.isBuilding) return b;
@@ -454,7 +485,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const totalProdBonus = 1 + prodBonus + globalProdBonus;
 
       for (const [key, rate] of Object.entries(production)) {
-        const amount = (rate as number) * elapsed * totalProdBonus;
+        const baseAmount = (rate as number) * elapsed * totalProdBonus;
+        const weatherMod = weatherEffects.resourceModifiers[key as keyof Resources] || 0;
+        const amount = baseAmount * (1 + weatherMod);
         totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
       }
 
@@ -518,7 +551,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const newQueue: TrainingQueue[] = [];
     const efficiency = state.recruitEfficiency;
     const trainSpeedBonus = calculateTechBonus(state.technologies, 'train_speed');
-    const scaledDelta = delta * efficiency * (1 + trainSpeedBonus);
+    const weatherEffects = state.getWeatherEffects();
+    const weatherTrainBonus = weatherEffects.trainingSpeedModifier;
+    const scaledDelta = delta * efficiency * (1 + trainSpeedBonus + weatherTrainBonus);
 
     for (const queue of state.trainingQueue) {
       let newProgress = queue.progress + scaledDelta;
@@ -566,17 +601,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const wave = Math.floor(state.day / 2) + 1;
     const invader = generateInvasion(wave);
+    const weatherEffects = state.getWeatherEffects();
+    const invasionMod = Math.max(-0.5, weatherEffects.invasionModifier);
+    const statMultiplier = 1 + invasionMod;
+
     const enemies: Enemy[] = [];
 
     for (let i = 0; i < invader.count; i++) {
       enemies.push({
         id: generateId(),
         type: invader.type as any,
-        hp: invader.hp,
-        maxHp: invader.maxHp,
-        attack: invader.attack,
-        defense: invader.defense,
+        hp: Math.floor(invader.hp * statMultiplier),
+        maxHp: Math.floor(invader.maxHp * statMultiplier),
+        attack: Math.floor(invader.attack * statMultiplier),
+        defense: Math.floor(invader.defense * statMultiplier),
       });
+    }
+
+    const scaledRewards: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(invader.reward)) {
+      scaledRewards[key as keyof Resources] = Math.floor((amount as number) * statMultiplier);
     }
 
     const invasion: Invasion = {
@@ -585,7 +629,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       enemies,
       isActive: true,
       countdown: 30,
-      rewards: invader.reward,
+      rewards: scaledRewards,
       result: 'pending',
     };
 
@@ -709,7 +753,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     if (state.resources.gold < 20) return;
     state.spendResources({ gold: 20 });
-    set({ trades: generateTrades(6) });
+    const weatherEffects = state.getWeatherEffects();
+    set({ trades: generateTrades(6, weatherEffects.tradeModifier) });
   },
 
   applyEventEffects: (effects) => {
@@ -1718,8 +1763,77 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return true;
   },
 
+  getWeatherEffects: () => {
+    const state = get();
+    return calculateWeatherEffects(state.season, state.weather);
+  },
+
+  advanceSeason: () => {
+    const state = get();
+    const nextSeason = getNextSeason(state.season);
+    const newWeather = selectWeatherForSeason(nextSeason);
+    set({
+      season: nextSeason,
+      seasonProgress: 0,
+      weather: newWeather,
+      weatherDuration: getWeatherDuration(newWeather),
+    });
+  },
+
+  changeWeather: () => {
+    const state = get();
+    const newWeather = selectWeatherForSeason(state.season);
+    set({
+      weather: newWeather,
+      weatherDuration: getWeatherDuration(newWeather),
+    });
+  },
+
+  processWeatherTick: (delta) => {
+    const state = get();
+    let seasonChanged = false;
+    let weatherChanged = false;
+
+    let newSeasonProgress = state.seasonProgress + delta;
+    let newWeatherDuration = state.weatherDuration - delta;
+
+    const seasonConfig = SEASONS[state.season];
+
+    if (newSeasonProgress >= seasonConfig.duration) {
+      const nextSeason = getNextSeason(state.season);
+      const newWeather = selectWeatherForSeason(nextSeason);
+      const newEffects = calculateWeatherEffects(nextSeason, newWeather);
+      set({
+        season: nextSeason,
+        seasonProgress: 0,
+        weather: newWeather,
+        weatherDuration: getWeatherDuration(newWeather),
+        trades: generateTrades(6, newEffects.tradeModifier),
+      });
+      seasonChanged = true;
+      weatherChanged = true;
+    } else if (newWeatherDuration <= 0) {
+      const newWeather = selectWeatherForSeason(state.season);
+      set({
+        seasonProgress: newSeasonProgress,
+        weather: newWeather,
+        weatherDuration: getWeatherDuration(newWeather),
+      });
+      weatherChanged = true;
+    } else {
+      set({
+        seasonProgress: newSeasonProgress,
+        weatherDuration: newWeatherDuration,
+      });
+    }
+
+    return { seasonChanged, weatherChanged };
+  },
+
   tick: (delta) => {
     const state = get();
+
+    state.processWeatherTick(delta);
 
     const collected = state.collectResources();
     for (const [key, amount] of Object.entries(collected)) {

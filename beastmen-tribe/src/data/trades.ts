@@ -10,8 +10,10 @@ export const RESOURCE_INFO: Record<ResourceType, { name: string; icon: string; c
 
 const RESOURCE_POOL: ResourceType[] = ['food', 'wood', 'stone', 'gold', 'iron'];
 
-export const generateTrades = (count: number = 6): TradeOffer[] => {
+export const generateTrades = (count: number = 6, tradeModifier: number = 0): TradeOffer[] => {
   const trades: TradeOffer[] = [];
+  const ratioMod = 1 + tradeModifier;
+  
   for (let i = 0; i < count; i++) {
     const giveResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
     let receiveResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
@@ -21,7 +23,8 @@ export const generateTrades = (count: number = 6): TradeOffer[] => {
 
     const isBuy = Math.random() > 0.5;
     const baseAmount = Math.floor(Math.random() * 80) + 20;
-    const ratio = 0.6 + Math.random() * 0.8;
+    const baseRatio = 0.6 + Math.random() * 0.8;
+    const ratio = Math.max(0.3, Math.min(1.5, baseRatio * ratioMod));
 
     trades.push({
       id: `trade-${Date.now()}-${i}`,

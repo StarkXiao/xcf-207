@@ -10,6 +10,7 @@ import { PopulationPanel } from './components/PopulationPanel';
 import { ExpeditionPanel } from './components/ExpeditionPanel';
 import { TechTreePanel } from './components/TechTreePanel';
 import { TaskPanel } from './components/TaskPanel';
+import { WeatherPanel } from './components/WeatherPanel';
 import './App.css';
 
 type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'task' | 'trade' | 'save';
@@ -53,6 +54,7 @@ function App() {
         </div>
 
         <div className="side-panel">
+          <WeatherPanel />
           <div className="tabs">
             {TABS.map((tab) => (
               <button

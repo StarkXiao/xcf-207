@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import {
   FACTIONS,
@@ -9,12 +9,20 @@ import {
 } from '../data/factions';
 import { getInvasionDiplomacyInfo } from '../data/enemies';
 import { getTradeDiplomacyInfo } from '../data/trades';
-import type { FactionType } from '../types';
+import type { FactionType, DiplomaticAction } from '../types';
 import { RESOURCE_INFO } from '../data/trades';
 
 export function DiplomacyPanel() {
   const [selectedFaction, setSelectedFaction] = useState<FactionType | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [, forceUpdate] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      forceUpdate((n) => n + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const factions = useGameStore((s) => s.factions);
   const activeDiplomaticEvents = useGameStore((s) => s.activeDiplomaticEvents);
@@ -38,10 +46,20 @@ export function DiplomacyPanel() {
   const handleAction = (actionId: string) => {
     const result = executeDiplomaticAction(actionId);
     showNotification(result.message);
+    forceUpdate((n) => n + 1);
   };
 
   const handleEventChoice = (eventId: string, choiceId: string) => {
     resolveDiplomaticEvent(eventId, choiceId);
+    forceUpdate((n) => n + 1);
+  };
+
+  const getActionCooldown = (action: DiplomaticAction) => {
+    const faction = factions[action.factionId];
+    if (!faction) return { onCooldown: false, remaining: 0 };
+    const elapsed = (Date.now() - faction.lastInteraction) / 1000;
+    const remaining = Math.max(0, action.cooldown - elapsed);
+    return { onCooldown: remaining > 0, remaining: Math.ceil(remaining) };
   };
 
   return (
@@ -198,15 +216,22 @@ export function DiplomacyPanel() {
                         const canAfford = Object.entries(action.cost).every(
                           ([key, amount]) => resources[key as keyof typeof resources] >= (amount as number)
                         );
+                        const cooldown = getActionCooldown(action);
+                        const isDisabled = !canAfford || cooldown.onCooldown;
                         return (
                           <button
                             key={action.id}
-                            className={`btn diplomatic-action-btn ${!canAfford ? 'disabled' : ''}`}
+                            className={`btn diplomatic-action-btn ${isDisabled ? 'disabled' : ''}`}
                             onClick={() => handleAction(action.id)}
-                            disabled={!canAfford}
+                            disabled={isDisabled}
                           >
                             <span className="action-icon">{action.icon}</span>
-                            <span className="action-name">{action.name}</span>
+                            <span className="action-name">
+                              {action.name}
+                              {cooldown.onCooldown && (
+                                <span className="cooldown-badge">冷却中 {cooldown.remaining}s</span>
+                              )}
+                            </span>
                             <span className="action-cost">
                               {Object.entries(action.cost).length > 0 ? (
                                 Object.entries(action.cost).map(([k, v]) => (

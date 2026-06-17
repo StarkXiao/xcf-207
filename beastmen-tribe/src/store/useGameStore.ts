@@ -1926,75 +1926,81 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const success = Math.random() < matchedAction.successRate;
     const repChange = success ? matchedAction.reputationChange.success : matchedAction.reputationChange.fail;
+    const currentRep = state.factions[targetFaction].reputation;
+    const newReputation = Math.max(-100, Math.min(100, currentRep + repChange));
+    const newStance = getStanceFromReputation(newReputation);
 
-    if (matchedAction.type === 'gift' && success) {
-      state.changeFactionReputation(targetFaction, repChange);
-      return { success: true, message: `礼物被欣然接受，${FACTIONS[targetFaction].name}对我们的好感提升了！` };
-    }
+    const newFactions = { ...state.factions };
+    newFactions[targetFaction] = {
+      ...newFactions[targetFaction],
+      reputation: newReputation,
+      stance: newStance,
+      tradeUnlocked: newReputation >= 0,
+      lastInteraction: now,
+    };
 
-    if (matchedAction.type === 'gift' && !success) {
-      return { success: false, message: '礼物似乎不太合心意...' };
+    let resultMessage = '';
+    let shouldRefreshTrades = false;
+    let shouldRefreshInvasion = false;
+
+    if (matchedAction.type === 'gift') {
+      if (success) {
+        resultMessage = `礼物被欣然接受，${FACTIONS[targetFaction].name}对我们的好感提升了！`;
+      } else {
+        newFactions[targetFaction].reputation = currentRep;
+        newFactions[targetFaction].stance = faction.stance;
+        newFactions[targetFaction].tradeUnlocked = faction.tradeUnlocked;
+        resultMessage = '礼物似乎不太合心意...';
+      }
     }
 
     if (matchedAction.type === 'trade_treaty') {
       if (success) {
-        state.changeFactionReputation(targetFaction, repChange);
-        const newFactions = { ...state.factions };
-        newFactions[targetFaction] = { ...newFactions[targetFaction], tradeUnlocked: true };
-        set({
-          factions: newFactions,
-          trades: generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions),
-        });
-        return { success: true, message: `与${FACTIONS[targetFaction].name}签订了贸易条约！` };
+        newFactions[targetFaction].tradeUnlocked = true;
+        shouldRefreshTrades = true;
+        resultMessage = `与${FACTIONS[targetFaction].name}签订了贸易条约！`;
       } else {
-        state.changeFactionReputation(targetFaction, repChange);
-        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝了贸易条约...` };
+        resultMessage = `${FACTIONS[targetFaction].name}拒绝了贸易条约...`;
       }
+      shouldRefreshInvasion = true;
     }
 
     if (matchedAction.type === 'military_aid_request') {
       if (success) {
-        state.changeFactionReputation(targetFaction, repChange);
         state.requestMilitaryAid(targetFaction);
-        return { success: true, message: `${FACTIONS[targetFaction].name}答应派遣援军！` };
+        resultMessage = `${FACTIONS[targetFaction].name}答应派遣援军！`;
       } else {
-        state.changeFactionReputation(targetFaction, repChange);
-        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝了援助请求...` };
+        resultMessage = `${FACTIONS[targetFaction].name}拒绝了援助请求...`;
       }
+      shouldRefreshInvasion = true;
     }
 
     if (matchedAction.type === 'alliance_proposal') {
       if (success) {
-        state.changeFactionReputation(targetFaction, repChange);
-        const newFactions = { ...state.factions };
-        newFactions[targetFaction] = {
-          ...newFactions[targetFaction],
-          reputation: Math.min(100, newFactions[targetFaction].reputation),
-          stance: 'ally',
-        };
-        set({ factions: newFactions });
-        return { success: true, message: `与${FACTIONS[targetFaction].name}缔结了同盟！` };
+        newFactions[targetFaction].reputation = Math.min(100, newReputation);
+        newFactions[targetFaction].stance = 'ally';
+        shouldRefreshTrades = true;
+        shouldRefreshInvasion = true;
+        resultMessage = `与${FACTIONS[targetFaction].name}缔结了同盟！`;
       } else {
-        state.changeFactionReputation(targetFaction, repChange);
-        return { success: false, message: `${FACTIONS[targetFaction].name}婉拒了同盟提议...` };
+        resultMessage = `${FACTIONS[targetFaction].name}婉拒了同盟提议...`;
       }
     }
 
     if (matchedAction.type === 'threaten') {
       if (success) {
-        state.changeFactionReputation(targetFaction, repChange);
         const loot: Partial<Resources> = { gold: 40, food: 30 };
         state.addResources(loot);
-        return { success: true, message: `武力威慑成功，${FACTIONS[targetFaction].name}缴纳了贡品！` };
+        resultMessage = `武力威慑成功，${FACTIONS[targetFaction].name}缴纳了贡品！`;
       } else {
-        state.changeFactionReputation(targetFaction, repChange);
-        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝屈服，关系恶化！` };
+        resultMessage = `${FACTIONS[targetFaction].name}拒绝屈服，关系恶化！`;
       }
+      shouldRefreshTrades = true;
+      shouldRefreshInvasion = true;
     }
 
     if (matchedAction.type === 'espionage') {
       if (success) {
-        state.changeFactionReputation(targetFaction, repChange);
         const config = FACTIONS[targetFaction];
         const loot: Partial<Resources> = {};
         if (config.speciality !== 'warriors' && config.speciality !== 'knowledge') {
@@ -2002,26 +2008,62 @@ export const useGameStore = create<GameStore>((set, get) => ({
         }
         loot.gold = 30;
         state.addResources(loot);
-        return { success: true, message: `间谍行动成功，获得了大量资源！` };
+        resultMessage = `间谍行动成功，获得了大量资源！`;
       } else {
-        state.changeFactionReputation(targetFaction, repChange);
-        return { success: false, message: `间谍被抓获，与${FACTIONS[targetFaction].name}关系严重恶化！` };
+        resultMessage = `间谍被抓获，与${FACTIONS[targetFaction].name}关系严重恶化！`;
       }
+      shouldRefreshTrades = true;
+      shouldRefreshInvasion = true;
     }
 
     if (matchedAction.type === 'denounce') {
-      state.changeFactionReputation(targetFaction, repChange);
       for (const fid of Object.keys(state.factions) as FactionType[]) {
         if (fid !== targetFaction && state.factions[fid].stance === 'enemy') {
-          if (state.factions[fid].id !== targetFaction) {
-            state.changeFactionReputation(fid, 5);
-          }
+          const enemyFaction = newFactions[fid];
+          const enemyNewRep = Math.max(-100, Math.min(100, enemyFaction.reputation + 5));
+          newFactions[fid] = {
+            ...enemyFaction,
+            reputation: enemyNewRep,
+            stance: getStanceFromReputation(enemyNewRep),
+            tradeUnlocked: enemyNewRep >= 0,
+          };
         }
       }
-      return { success: true, message: `公开谴责了${FACTIONS[targetFaction].name}！` };
+      shouldRefreshTrades = true;
+      shouldRefreshInvasion = true;
+      resultMessage = `公开谴责了${FACTIONS[targetFaction].name}！`;
     }
 
-    return { success: false, message: '未知行动' };
+    if (repChange < 0) {
+      const allies = Object.values(newFactions).filter((f) => f.stance === 'ally' && f.id !== targetFaction);
+      for (const ally of allies) {
+        const allyRep = Math.max(-100, Math.min(100, ally.reputation - 3));
+        newFactions[ally.id] = {
+          ...ally,
+          reputation: allyRep,
+          stance: getStanceFromReputation(allyRep),
+          tradeUnlocked: allyRep >= 0,
+        };
+      }
+    }
+
+    const setPayload: any = { factions: newFactions };
+
+    if (shouldRefreshTrades) {
+      setPayload.trades = generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions);
+    }
+
+    if (shouldRefreshInvasion) {
+      const s = get();
+      if (!s.invasion?.isActive) {
+        const wave = Math.floor(s.day / 2) + 1;
+        setPayload.invasion = generateInvasion(wave, newFactions);
+      }
+    }
+
+    set(setPayload);
+
+    return { success, message: resultMessage };
   },
 
   getAvailableDiplomaticActions: (factionId) => {
@@ -2040,10 +2082,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!choice) return;
 
     const effects = choice.effects;
+    const newFactions = { ...state.factions };
+    let reputationChanged = false;
 
     if (effects.reputationChanges) {
       for (const [fid, amount] of Object.entries(effects.reputationChanges)) {
-        state.changeFactionReputation(fid as FactionType, amount as number);
+        const factionId = fid as FactionType;
+        const faction = newFactions[factionId];
+        if (faction) {
+          const newRep = Math.max(-100, Math.min(100, faction.reputation + (amount as number)));
+          newFactions[factionId] = {
+            ...faction,
+            reputation: newRep,
+            stance: getStanceFromReputation(newRep),
+            tradeUnlocked: newRep >= 0,
+          };
+          reputationChanged = true;
+
+          if ((amount as number) < 0) {
+            const allies = Object.values(newFactions).filter((f) => f.stance === 'ally' && f.id !== factionId);
+            for (const ally of allies) {
+              const allyRep = Math.max(-100, Math.min(100, ally.reputation - 3));
+              newFactions[ally.id] = {
+                ...ally,
+                reputation: allyRep,
+                stance: getStanceFromReputation(allyRep),
+                tradeUnlocked: allyRep >= 0,
+              };
+            }
+          }
+        }
       }
     }
 
@@ -2082,9 +2150,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.triggerEnding(effects.triggerEnding);
     }
 
-    set({
+    const setPayload: any = {
+      factions: newFactions as Record<FactionType, Faction>,
       activeDiplomaticEvents: state.activeDiplomaticEvents.filter((e) => e.id !== eventId),
-    });
+    };
+
+    if (reputationChanged) {
+      const currentState = get();
+      setPayload.trades = generateTrades(6, currentState.getWeatherEffects().tradeModifier, newFactions);
+      if (!currentState.invasion?.isActive) {
+        const wave = Math.floor(currentState.day / 2) + 1;
+        setPayload.invasion = generateInvasion(wave, newFactions);
+      }
+    }
+
+    set(setPayload);
   },
 
   processDiplomaticTick: (delta) => {

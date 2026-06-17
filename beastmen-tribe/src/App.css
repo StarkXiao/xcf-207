@@ -3373,6 +3373,18 @@ body {
       .action-name {
         font-weight: 600;
         text-align: left;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .cooldown-badge {
+        font-size: 10px;
+        background: rgba(255, 152, 0, 0.3);
+        color: #ffb74d;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-weight: 600;
       }
 
       .action-cost {

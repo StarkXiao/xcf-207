@@ -54,7 +54,7 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
   barracks: {
     id: 'barracks',
     name: '兵营',
-    description: '训练战士的场所，升级可解锁更强兵种',
+    description: '训练战士的场所，升级可训练更强兵种',
     icon: '⚔️',
     baseCost: { wood: 150, stone: 100, gold: 30 },
     maxLevel: 6,

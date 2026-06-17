@@ -320,7 +320,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       buildings: newBuildings,
       unlockedBuildings: newUnlocked,
-      maxPopulation: calculateMaxPopulation(newBuildings),
+      maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
     });
     return true;
   },
@@ -344,7 +344,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
     if (!state.spendResources(cost)) return false;
 
-    const newWarriors = [...state.unlockedWarriors];
     const newUnlockedBuildings = [...state.unlockedBuildings];
     const newBuildings = state.buildings.map((b) => {
       if (b.id !== buildingId) return b;
@@ -356,23 +355,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
           if (!newUnlockedBuildings.includes('market')) newUnlockedBuildings.push('market');
         }
       }
-      if (b.type === 'barracks') {
-        if (newLevel >= 2 && !newWarriors.includes('archer')) newWarriors.push('archer');
-        if (newLevel >= 3 && !newWarriors.includes('shaman')) newWarriors.push('shaman');
-      }
-      if (b.type === 'smithy') {
-        if (newLevel >= 2 && !newWarriors.includes('berserker')) newWarriors.push('berserker');
-        if (newLevel >= 4 && !newWarriors.includes('warlord')) newWarriors.push('warlord');
-      }
 
       return { ...b, level: newLevel };
     });
 
     set({
       buildings: newBuildings,
-      unlockedWarriors: newWarriors,
       unlockedBuildings: newUnlockedBuildings,
-      maxPopulation: calculateMaxPopulation(newBuildings),
+      maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
     });
     return true;
   },

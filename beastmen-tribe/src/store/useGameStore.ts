@@ -16,6 +16,8 @@ import type {
   ExpeditionResult,
   ExpeditionNotification,
   MapEventChoice,
+  Tech,
+  TechEffectType,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -23,16 +25,71 @@ import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
 import { triggerRandomEvent } from '../data/events';
 import {
-  EXPEDITION_MAPS,
   NODE_MARCH_TIME,
   EXP_GAIN,
   rollLoot,
   getExpeditionMap,
 } from '../data/expedition';
+import { TECHNOLOGIES } from '../data/technologies';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+const calculateTechBonus = (
+  technologies: Tech[],
+  effectType: TechEffectType,
+  target?: string
+): number => {
+  let bonus = 0;
+  for (const tech of technologies) {
+    if (!tech.completed) continue;
+    const config = TECHNOLOGIES[tech.techId];
+    if (!config) continue;
+    for (const effect of config.effects) {
+      if (effect.type === effectType) {
+        if (!effect.target || effect.target === target) {
+          bonus += effect.value;
+        }
+      }
+    }
+  }
+  return bonus;
+};
+
+const calculateWallDefense = (buildings: Building[], technologies: Tech[]): number => {
+  const baseDefense = buildings
+    .filter((b) => b.type === 'wall' && !b.isBuilding)
+    .reduce((sum, b) => sum + b.level * 10, 0);
+  const techBonus = calculateTechBonus(technologies, 'wall_defense');
+  return Math.floor(baseDefense * (1 + techBonus));
+};
+
+const checkTechRequirements = (
+  techId: string,
+  buildings: Building[],
+  technologies: Tech[]
+): boolean => {
+  const config = TECHNOLOGIES[techId];
+  if (!config?.requires) return true;
+
+  for (const req of config.requires) {
+    if (req.type === 'building') {
+      const building = buildings.find(
+        (b) => b.type === req.id && !b.isBuilding
+      );
+      if (!building || building.level < (req.level || 1)) {
+        return false;
+      }
+    } else if (req.type === 'tech') {
+      const tech = technologies.find((t) => t.techId === req.id);
+      if (!tech || !tech.completed) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
 
 const FOOD_PER_POP = 0.5;
 const BASE_POP_CAPACITY = 10;
@@ -43,7 +100,7 @@ const LOYALTY_RECOVERY_WELL_FED = 0.1;
 const EVENT_INTERVAL_MIN = 60;
 const EVENT_INTERVAL_MAX = 120;
 
-const calculateMaxPopulation = (buildings: Building[]): number => {
+const calculateMaxPopulation = (buildings: Building[], technologies: Tech[] = []): number => {
   let cap = BASE_POP_CAPACITY;
   for (const b of buildings) {
     if (b.isBuilding) continue;
@@ -56,6 +113,8 @@ const calculateMaxPopulation = (buildings: Building[]): number => {
       }
     }
   }
+  const techBonus = calculateTechBonus(technologies, 'population_cap');
+  cap += techBonus;
   return cap;
 };
 
@@ -114,6 +173,9 @@ const createInitialState = (): GameState => ({
   expeditionNotifications: [],
   totalExpeditions: 0,
   expeditionWins: 0,
+  technologies: [],
+  activeResearch: null,
+  unlockedTechnologies: [],
 });
 
 const loadSave = (): GameState => {
@@ -128,18 +190,21 @@ const loadSave = (): GameState => {
         selectedBuildingId: null,
         activeEvents: parsed.activeEvents || [],
         population: parsed.population ?? 8,
-        maxPopulation: parsed.maxPopulation ?? calculateMaxPopulation(parsed.buildings),
+        maxPopulation: parsed.maxPopulation ?? calculateMaxPopulation(parsed.buildings, parsed.technologies || []),
         loyalty: parsed.loyalty ?? 70,
         foodConsumptionRate: parsed.foodConsumptionRate ?? FOOD_PER_POP,
         eventCooldown: parsed.eventCooldown ?? EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
         recruitEfficiency: parsed.recruitEfficiency ?? 0.5 + ((parsed.loyalty ?? 70) / 100) * 0.5,
       };
-      state.maxPopulation = calculateMaxPopulation(state.buildings);
+      state.maxPopulation = calculateMaxPopulation(state.buildings, state.technologies);
       state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
       state.activeExpedition = parsed.activeExpedition || null;
       state.expeditionNotifications = parsed.expeditionNotifications || [];
       state.totalExpeditions = parsed.totalExpeditions || 0;
       state.expeditionWins = parsed.expeditionWins || 0;
+      state.technologies = parsed.technologies || [];
+      state.activeResearch = parsed.activeResearch || null;
+      state.unlockedTechnologies = parsed.unlockedTechnologies || [];
       return state;
     }
   } catch (e) {
@@ -178,6 +243,12 @@ interface GameStore extends GameState {
   settleExpedition: () => void;
   cancelExpedition: () => void;
   dismissExpeditionNotification: (id: string) => void;
+
+  startResearch: (techId: string) => boolean;
+  cancelResearch: () => void;
+  processResearch: (delta: number) => void;
+  canResearch: (techId: string) => boolean;
+  getTechBonus: (effectType: TechEffectType, target?: string) => number;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -221,7 +292,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!config) return false;
     if (!state.unlockedBuildings.includes(type)) return false;
 
-    const cost = getBuildingCost(type, 0);
+    const baseCost = getBuildingCost(type, 0);
+    const costBonus = calculateTechBonus(state.technologies, 'resource_cost');
+    const cost: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(baseCost)) {
+      cost[key as keyof Resources] = Math.floor((amount as number) * (1 + costBonus));
+    }
     if (!state.spendResources(cost)) return false;
 
     const newBuilding: Building = {
@@ -260,7 +336,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const config = BUILDINGS[building.type];
     if (!config || building.level >= config.maxLevel) return false;
 
-    const cost = getBuildingCost(building.type, building.level);
+    const baseCost = getBuildingCost(building.type, building.level);
+    const costBonus = calculateTechBonus(state.technologies, 'resource_cost');
+    const cost: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(baseCost)) {
+      cost[key as keyof Resources] = Math.floor((amount as number) * (1 + costBonus));
+    }
     if (!state.spendResources(cost)) return false;
 
     const newWarriors = [...state.unlockedWarriors];
@@ -307,8 +388,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (Object.keys(production).length === 0) return b;
 
       const elapsed = (now - b.lastCollect) / 1000;
+      const prodBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
+      const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
+      const totalProdBonus = 1 + prodBonus + globalProdBonus;
+
       for (const [key, rate] of Object.entries(production)) {
-        const amount = (rate as number) * elapsed;
+        const amount = (rate as number) * elapsed * totalProdBonus;
         totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
       }
 
@@ -333,7 +418,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!reqBuilding || reqBuilding.level < config.requires.level) return false;
     }
 
-    if (!state.spendResources(config.cost)) return false;
+    const trainCostBonus = calculateTechBonus(state.technologies, 'train_cost');
+    const actualCost: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(config.cost)) {
+      actualCost[key as keyof Resources] = Math.floor((amount as number) * (1 + trainCostBonus));
+    }
+
+    if (!state.spendResources(actualCost)) return false;
 
     const existingQueue = state.trainingQueue.find((q) => q.type === type);
     if (existingQueue) {
@@ -365,7 +456,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const completed: Warrior[] = [];
     const newQueue: TrainingQueue[] = [];
     const efficiency = state.recruitEfficiency;
-    const scaledDelta = delta * efficiency;
+    const trainSpeedBonus = calculateTechBonus(state.technologies, 'train_speed');
+    const scaledDelta = delta * efficiency * (1 + trainSpeedBonus);
 
     for (const queue of state.trainingQueue) {
       let newProgress = queue.progress + scaledDelta;
@@ -445,14 +537,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
 
-    const wallLevel = state.buildings
-      .filter((b) => b.type === 'wall')
-      .reduce((sum, b) => sum + b.level * 10, 0);
-
+    const wallDefense = calculateWallDefense(state.buildings, state.technologies);
     const loyaltyBonus = Math.floor(state.loyalty / 20);
+
+    myWarriors = myWarriors.map((w) => {
+      const atkBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
+        calculateTechBonus(state.technologies, 'attack_boost');
+      const defBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
+        calculateTechBonus(state.technologies, 'defense_boost');
+      const hpBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
+        calculateTechBonus(state.technologies, 'hp_boost');
+
+      return {
+        ...w,
+        attack: Math.floor(w.attack * (1 + atkBonus)),
+        defense: Math.floor(w.defense * (1 + defBonus)),
+        maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
+        hp: Math.floor(w.hp * (1 + hpBonus)),
+      };
+    });
+
     log.push(`⚔️ 第 ${invasion.wave} 波入侵开始！`);
     log.push(`敌人：${enemies.map((e) => ENEMIES[e.type].name).join(', ')}`);
-    log.push(`我方防御加成：+${wallLevel}，士气加成：+${loyaltyBonus}`);
+    log.push(`我方防御加成：+${wallDefense}，士气加成：+${loyaltyBonus}`);
 
     let round = 0;
     while (myWarriors.length > 0 && enemies.length > 0 && round < 20) {
@@ -474,7 +581,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       for (const enemy of enemies) {
         if (myWarriors.length === 0) break;
         const target = myWarriors[0];
-        const damage = Math.max(1, enemy.attack - target.defense / 2 - wallLevel / 10);
+        const damage = Math.max(1, enemy.attack - target.defense / 2 - wallDefense / 10);
         target.hp -= damage;
         log.push(`${ENEMIES[enemy.type].name} 攻击 ${WARRIORS[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
         if (target.hp <= 0) {
@@ -588,14 +695,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     if (state.population <= 0) return;
 
-    const foodConsumed = state.population * state.foodConsumptionRate * delta;
+    const foodConsumptionBonus = calculateTechBonus(state.technologies, 'food_consumption');
+    const loyaltyDecayBonus = calculateTechBonus(state.technologies, 'loyalty_decay');
+    const adjustedConsumptionRate = state.foodConsumptionRate * (1 + foodConsumptionBonus);
+    const adjustedLoyaltyDecay = LOYALTY_DECAY_NO_FOOD * (1 + loyaltyDecayBonus);
+
+    const foodConsumed = state.population * adjustedConsumptionRate * delta;
     let newFood = state.resources.food - foodConsumed;
     let newLoyalty = state.loyalty;
     let newPopulation = state.population;
 
     if (newFood < 0) {
       newFood = 0;
-      newLoyalty -= LOYALTY_DECAY_NO_FOOD * delta;
+      newLoyalty -= adjustedLoyaltyDecay * delta;
     } else {
       if (newFood > LOYALTY_FOOD_THRESHOLD) {
         newLoyalty += LOYALTY_RECOVERY_WELL_FED * delta;
@@ -743,8 +855,27 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let victory = false;
     let loot: Partial<Resources> = {};
     let casualties = 0;
-    const expGain = EXP_GAIN[node.difficulty] || 10;
+    const baseExpGain = EXP_GAIN[node.difficulty] || 10;
+    const expBonus = calculateTechBonus(state.technologies, 'exp_bonus');
+    const expGain = Math.floor(baseExpGain * (1 + expBonus));
     let warriors = expedition.warriors.map((w) => ({ ...w }));
+
+    warriors = warriors.map((w) => {
+      const atkBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
+        calculateTechBonus(state.technologies, 'attack_boost');
+      const defBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
+        calculateTechBonus(state.technologies, 'defense_boost');
+      const hpBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
+        calculateTechBonus(state.technologies, 'hp_boost');
+
+      return {
+        ...w,
+        attack: Math.floor(w.attack * (1 + atkBonus)),
+        defense: Math.floor(w.defense * (1 + defBonus)),
+        maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
+        hp: Math.min(Math.floor(w.hp * (1 + hpBonus)), Math.floor(w.maxHp * (1 + hpBonus))),
+      };
+    });
 
     log.push(`📍 ${node.name} - ${node.description}`);
 
@@ -903,8 +1034,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       log.push(`💀 远征队全军覆没...`);
     }
 
-    const newTotalLoot: Partial<Resources> = { ...expedition.totalLoot };
+    const lootBonus = calculateTechBonus(state.technologies, 'loot_bonus');
+    const adjustedLoot: Partial<Resources> = {};
     for (const [key, amount] of Object.entries(loot)) {
+      adjustedLoot[key as keyof Resources] = Math.floor((amount as number) * (1 + lootBonus));
+    }
+
+    const newTotalLoot: Partial<Resources> = { ...expedition.totalLoot };
+    for (const [key, amount] of Object.entries(adjustedLoot)) {
       newTotalLoot[key as keyof Resources] = (newTotalLoot[key as keyof Resources] || 0) + (amount as number);
     }
 
@@ -913,7 +1050,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       nodeName: node.name,
       type: node.type,
       victory,
-      loot,
+      loot: adjustedLoot,
       casualties,
       log,
     };
@@ -1113,6 +1250,127 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
+  canResearch: (techId) => {
+    const state = get();
+    const config = TECHNOLOGIES[techId];
+    if (!config) return false;
+    if (state.activeResearch) return false;
+    if (state.technologies.some((t) => t.techId === techId && t.completed)) return false;
+    if (state.technologies.some((t) => t.techId === techId && t.isResearching)) return false;
+    if (!state.canAfford(config.cost)) return false;
+    return checkTechRequirements(techId, state.buildings, state.technologies);
+  },
+
+  startResearch: (techId) => {
+    const state = get();
+    if (!state.canResearch(techId)) return false;
+
+    const config = TECHNOLOGIES[techId];
+    if (!state.spendResources(config.cost)) return false;
+
+    const newTech: Tech = {
+      id: generateId(),
+      techId,
+      isResearching: true,
+      progress: 0,
+      completed: false,
+      startedAt: Date.now(),
+    };
+
+    set({
+      technologies: [...state.technologies, newTech],
+      activeResearch: newTech,
+      unlockedTechnologies: [...state.unlockedTechnologies, techId],
+    });
+
+    return true;
+  },
+
+  cancelResearch: () => {
+    const state = get();
+    if (!state.activeResearch) return;
+
+    const newTechnologies = state.technologies.filter(
+      (t) => t.id !== state.activeResearch!.id
+    );
+
+    set({
+      technologies: newTechnologies,
+      activeResearch: null,
+    });
+  },
+
+  processResearch: (delta) => {
+    const state = get();
+    if (!state.activeResearch) return;
+
+    const config = TECHNOLOGIES[state.activeResearch.techId];
+    if (!config) return;
+
+    const newProgress = state.activeResearch.progress + delta;
+
+    if (newProgress >= config.researchTime) {
+      const completedTech: Tech = {
+        ...state.activeResearch,
+        isResearching: false,
+        progress: config.researchTime,
+        completed: true,
+      };
+
+      const newTechnologies = state.technologies.map((t) =>
+        t.id === state.activeResearch!.id ? completedTech : t
+      );
+
+      let newUnlockedWarriors = [...state.unlockedWarriors];
+      let newUnlockedBuildings = [...state.unlockedBuildings];
+
+      if (config.unlocks?.warriors) {
+        for (const warriorType of config.unlocks.warriors) {
+          if (!newUnlockedWarriors.includes(warriorType)) {
+            newUnlockedWarriors.push(warriorType);
+          }
+        }
+      }
+
+      if (config.unlocks?.buildings) {
+        for (const buildingType of config.unlocks.buildings) {
+          if (!newUnlockedBuildings.includes(buildingType)) {
+            newUnlockedBuildings.push(buildingType);
+          }
+        }
+      }
+
+      const newMaxPop = calculateMaxPopulation(state.buildings, newTechnologies);
+
+      set({
+        technologies: newTechnologies,
+        activeResearch: null,
+        unlockedWarriors: newUnlockedWarriors,
+        unlockedBuildings: newUnlockedBuildings,
+        maxPopulation: newMaxPop,
+      });
+    } else {
+      const updatedTech: Tech = {
+        ...state.activeResearch,
+        progress: newProgress,
+      };
+
+      const newTechnologies = state.technologies.map((t) =>
+        t.id === state.activeResearch!.id ? updatedTech : t
+      );
+
+      set({
+        technologies: newTechnologies,
+        activeResearch: updatedTech,
+      });
+    }
+  },
+
+  getTechBonus: (effectType, target) => {
+    const state = get();
+    return calculateTechBonus(state.technologies, effectType, target);
+  },
+
   tick: (delta) => {
     const state = get();
 
@@ -1121,6 +1379,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processPopulationTick(delta);
     state.processEventTick(delta);
     state.processExpeditionTick(delta);
+    state.processResearch(delta);
 
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {

@@ -252,6 +252,58 @@ export interface ExpeditionNotification {
   duration: number;
 }
 
+export type TechCategory = 'military' | 'economy' | 'defense';
+
+export type TechEffectType =
+  | 'attack_boost'
+  | 'defense_boost'
+  | 'hp_boost'
+  | 'train_speed'
+  | 'train_cost'
+  | 'production_boost'
+  | 'resource_cost'
+  | 'wall_defense'
+  | 'loot_bonus'
+  | 'exp_bonus'
+  | 'food_consumption'
+  | 'population_cap'
+  | 'loyalty_decay';
+
+export interface TechEffect {
+  type: TechEffectType;
+  value: number;
+  target?: WarriorType | ResourceType | BuildingType;
+}
+
+export interface TechRequirement {
+  type: 'building' | 'tech' | 'warrior';
+  id: string;
+  level?: number;
+}
+
+export interface TechConfig {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: TechCategory;
+  tier: number;
+  cost: Partial<Resources>;
+  researchTime: number;
+  effects: TechEffect[];
+  requires?: TechRequirement[];
+  unlocks?: { warriors?: WarriorType[]; buildings?: BuildingType[] };
+}
+
+export interface Tech {
+  id: string;
+  techId: string;
+  isResearching: boolean;
+  progress: number;
+  completed: boolean;
+  startedAt: number;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -278,4 +330,7 @@ export interface GameState {
   expeditionNotifications: ExpeditionNotification[];
   totalExpeditions: number;
   expeditionWins: number;
+  technologies: Tech[];
+  activeResearch: Tech | null;
+  unlockedTechnologies: string[];
 }

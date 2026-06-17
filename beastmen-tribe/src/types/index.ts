@@ -818,6 +818,216 @@ export interface NightRaidState {
   garrisonWarriors: string[];
 }
 
+export type ChieftainAttribute =
+  | 'martial'
+  | 'diplomacy'
+  | 'stewardship'
+  | 'piety'
+  | 'cunning'
+  | 'charisma';
+
+export type InheritanceType = 'hereditary'
+  | 'election'
+  | 'challenge'
+  | 'abdication';
+
+export interface Trait {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  rarity: 'common' | 'rare' | 'legendary';
+  effects: PolicyEffect[];
+}
+
+export interface ChieftainTraits {
+  martial: number;
+  diplomacy: number;
+  stewardship: number;
+  piety: number;
+  cunning: number;
+  charisma: number;
+}
+
+export interface Chieftain {
+  id: string;
+  name: string;
+  title: string;
+  nickname?: string;
+  age: number;
+  maxAge: number;
+  traits: Trait[];
+  attributes: ChieftainTraits;
+  personality: string;
+  personalityDescription: string;
+  icon: string;
+  startedDay: number;
+  predecessorId: string | null;
+  dynastyName: string;
+  dynasty: string;
+  reignDays: number;
+  achievements: string[];
+  causeOfDeath?: string;
+  avatar: string;
+}
+
+export type Heir = {
+  id: string;
+  name: string;
+  age: number;
+  traits: Trait[];
+  promisedAttributes: ChieftainTraits;
+  personality: string;
+  claimStrength: number;
+  support: number;
+  avatar: string;
+  icon: string;
+  relation: string;
+  isCandidate: boolean;
+};
+
+export type InheritanceCandidate = Heir & {
+  isHeir: boolean;
+};
+
+export type PolicyCategory =
+  | 'military'
+  | 'economy'
+  | 'diplomacy'
+  | 'culture'
+  | 'religion'
+  | 'law';
+
+export type PolicyEffectType =
+  | 'attack_boost'
+  | 'defense_boost'
+  | 'hp_boost'
+  | 'train_speed'
+  | 'train_cost'
+  | 'production_boost'
+  | 'resource_cost'
+  | 'loyalty_boost'
+  | 'population_growth'
+  | 'food_consumption'
+  | 'loot_bonus'
+  | 'exp_bonus'
+  | 'warrior_preference_attack'
+  | 'warrior_preference_defense'
+  | 'warrior_preference_hp'
+  | 'tax_food'
+  | 'tax_wood'
+  | 'tax_stone'
+  | 'tax_gold'
+  | 'tax_iron'
+  | 'loyalty_decay'
+  | 'population_cap'
+  | 'faith_gain'
+  | 'trade_bonus'
+  | 'wall_defense'
+  | 'diplomacy_bonus'
+  | 'warrior_unlock_boost'
+  | 'construction_speed'
+  | 'research_speed'
+  | 'tax_rate'
+  | 'policy_point_rate'
+  | 'prestige_gain'
+  | 'chief_longevity';
+
+export interface PolicyEffect {
+  type: PolicyEffectType;
+  value: number;
+  target?: WarriorType | ResourceType | BuildingType;
+}
+
+export interface PolicyRequirement {
+  type: 'trait' | 'policy' | 'building' | 'tech' | 'day' | 'tier';
+  id?: string;
+  attribute?: ChieftainAttribute;
+  minValue?: number;
+  name?: string;
+}
+
+export interface PolicyConfig {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: PolicyCategory;
+  tier: 1 | 2 | 3;
+  cost: number;
+  researchTime: number;
+  effects: PolicyEffect[];
+  requires?: PolicyRequirement[];
+  mutuallyExclusive?: string[];
+}
+
+export interface ActivePolicy {
+  id: string;
+  policyId: string;
+  activatedAt: number;
+  activatedDay: number;
+}
+
+export interface ResearchingPolicy {
+  policyId: string;
+  progress: number;
+  total: number;
+  startedAt: number;
+}
+
+export type UnitPreference = {
+  primary: 'balanced' | 'infantry' | 'cavalry' | 'archer' | 'shaman' | 'beast';
+  preferred: WarriorType[];
+  bonus: Partial<Record<WarriorType, number>>;
+};
+
+export type TaxRates = {
+  food: number;
+  wood: number;
+  stone: number;
+  gold: number;
+  iron: number;
+  leather?: number;
+};
+
+export interface ChieftainState {
+  current: Chieftain | null;
+  history: Chieftain[];
+  dynastyName: string;
+  inheritanceType: InheritanceType;
+  heir: Heir | null;
+  heirs: Heir[];
+  selectedHeirId: string | null;
+  successionCrisis: boolean;
+  successionCrisisTimer: number;
+  abdicationAvailable: boolean;
+}
+
+export interface GovernmentState {
+  chieftain: ChieftainState;
+  policyPoints: number;
+  maxPolicyPoints: number;
+  policyPointRate: number;
+  activePolicies: ActivePolicy[];
+  researchingPolicy: ResearchingPolicy | null;
+  availablePolicies: string[];
+  completedPolicies: string[];
+  policyCooldowns: Record<string, number>;
+  unlockedPolicyCategories: PolicyCategory[];
+  unitPreference: UnitPreference;
+  taxRates: TaxRates;
+  lastPolicyPointTick: number;
+  reignBonuses: {
+    totalDays: number;
+    bonusAttack: number;
+    bonusProduction: number;
+    bonusLoyalty: number;
+    dynastyRenown: number;
+  };
+  achievements: string[];
+  prestige: number;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -870,4 +1080,5 @@ export interface GameState {
   gameEnding: GameEnding | null;
   totem: TotemState;
   nightRaid: NightRaidState;
+  government: GovernmentState;
 }

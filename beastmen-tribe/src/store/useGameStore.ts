@@ -32,6 +32,14 @@ import type {
   EndingType,
   GameEnding,
   BuildingStorageInfo,
+  Chieftain,
+  Heir,
+  PolicyEffectType,
+  PolicyCategory,
+  InheritanceType,
+  ActivePolicy,
+  TaxRates,
+  UnitPreference,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -93,6 +101,25 @@ import {
   calculateTrapDamage,
   generateId as generateNightRaidId,
 } from '../data/nightRaid';
+import {
+  POLICIES,
+  POLICY_CATEGORIES,
+  INHERITANCE_CONFIGS,
+  generateTribeName,
+  generateHeirs,
+  getPolicyById,
+  getPolicyResearchTime,
+  getPolicyPointGainPerDay,
+  getMaxPolicyPoints,
+  calculateTraitBonus,
+  getPreferredWarriorType,
+  getReignBonus,
+  generateGovernmentAchievements,
+  getTraitName,
+  createInitialGovernmentState,
+  getPoliciesByCategory,
+  getChiefTitleByTrait,
+} from '../data/government';
 import type {
   ResourceType,
   ResourceCapacity,
@@ -143,6 +170,78 @@ const calculateTotemBonus = (
   let bonus = 0;
   bonus += getTotemEffectBonus(unlockedTotems, effectType, target);
   bonus += getBlessingBonus(activeBlessings, effectType, target);
+  return bonus;
+};
+
+const calculateGovernmentBonus = (
+  state: GameState,
+  effectType: PolicyEffectType | TechEffectType | TotemEffectType,
+  target?: string
+): number => {
+  let bonus = 0;
+  const gov = state.government;
+  if (!gov) return 0;
+
+  const chieftain = gov.chieftain.current;
+  if (chieftain) {
+    const traitBonuses = calculateTraitBonus(chieftain.attributes);
+    switch (effectType) {
+      case 'attack_boost':
+        bonus += traitBonuses.attack;
+        break;
+      case 'defense_boost':
+        bonus += traitBonuses.defense;
+        break;
+      case 'train_speed':
+        bonus += traitBonuses.trainSpeed;
+        break;
+      case 'production_boost':
+        bonus += traitBonuses.production;
+        break;
+      case 'diplomacy_bonus':
+        bonus += traitBonuses.diplomacy;
+        break;
+      case 'trade_bonus':
+        bonus += traitBonuses.tradeBonus;
+        break;
+      case 'faith_gain':
+        bonus += traitBonuses.faithGain;
+        break;
+      case 'loyalty_boost':
+        bonus += traitBonuses.loyaltyBoost;
+        break;
+      case 'population_growth':
+        bonus += traitBonuses.populationGrowth;
+        break;
+      case 'research_speed':
+        bonus += traitBonuses.researchSpeed;
+        break;
+      case 'loot_bonus':
+        bonus += traitBonuses.lootBonus;
+        break;
+      case 'construction_speed':
+        bonus += traitBonuses.constructionSpeed;
+        break;
+    }
+
+    const reignBonuses = getReignBonus(chieftain.reignDays);
+    if (effectType === 'attack_boost') bonus += reignBonuses.attackBonus;
+    if (effectType === 'production_boost') bonus += reignBonuses.productionBonus;
+    if (effectType === 'loyalty_boost') bonus += reignBonuses.loyaltyBonus;
+  }
+
+  for (const activePolicy of gov.activePolicies) {
+    const policy = getPolicyById(activePolicy.policyId);
+    if (!policy) continue;
+    for (const effect of policy.effects) {
+      if (effect.type === effectType) {
+        if (!effect.target || effect.target === target) {
+          bonus += effect.value;
+        }
+      }
+    }
+  }
+
   return bonus;
 };
 
@@ -407,6 +506,7 @@ const createInitialState = (): GameState => {
     gameEnding: null,
     totem: createInitialTotemState(),
     nightRaid: createInitialNightRaidState(),
+    government: createInitialGovernmentState(1),
   };
 };
 
@@ -592,6 +692,22 @@ const loadSave = (): GameState => {
           }
         : createInitialNightRaidState();
 
+      state.government = parsed.government
+        ? {
+            ...createInitialGovernmentState(state.day),
+            ...parsed.government,
+            chieftain: {
+              ...createInitialGovernmentState(state.day).chieftain,
+              ...parsed.government.chieftain,
+              heirs: parsed.government.chieftain?.heirs || [],
+            },
+            activePolicies: parsed.government.activePolicies || [],
+            completedPolicies: parsed.government.completedPolicies || [],
+            availablePolicies: parsed.government.availablePolicies || POLICIES.filter(p => p.tier === 1).map(p => p.id),
+            unlockedPolicyCategories: parsed.government.unlockedPolicyCategories || ['military', 'economy', 'culture'],
+          }
+        : createInitialGovernmentState(state.day);
+
       return state;
     }
   } catch (e) {
@@ -698,6 +814,26 @@ interface GameStore extends GameState {
   claimRaidReward: (reportId: string) => boolean;
   closeNightRaidResult: () => void;
   processNightRaidTick: (delta: number) => void;
+
+  getGovernmentBonus: (effectType: PolicyEffectType | TechEffectType | TotemEffectType, target?: string) => number;
+  startPolicyResearch: (policyId: string) => { success: boolean; message: string };
+  cancelPolicyResearch: () => void;
+  processPolicyResearch: (delta: number) => void;
+  canResearchPolicy: (policyId: string) => { canResearch: boolean; reason?: string };
+  abdicateChieftain: (heirId: string) => { success: boolean; message: string };
+  abdicateChief: (heirId?: string) => { success: boolean; message: string };
+  selectHeir: (heirId: string) => { success: boolean; message: string };
+  changeInheritanceType: (type: InheritanceType) => { success: boolean; message: string };
+  adjustTaxRate: (resource: ResourceType, rate: number) => { success: boolean; message: string };
+  setTaxRate: (resource: keyof TaxRates, rate: number) => void;
+  regenerateTribeName: () => string;
+  refreshHeirs: () => void;
+  processGovernmentTick: (delta: number) => void;
+  unlockPolicyCategory: (category: PolicyCategory) => { success: boolean; message: string };
+  activatePolicy: (policyId: string) => { success: boolean; message: string };
+  deactivatePolicy: (policyId: string) => { success: boolean; message: string };
+  isPolicyActive: (policyId: string) => boolean;
+  setUnitPreference: (pref: UnitPreference) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -1020,7 +1156,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const globalProdTechBonus = calculateTechBonus(state.technologies, 'production_boost');
       const prodTotemBonus = state.getTotemBonus('production_boost', b.type);
       const globalProdTotemBonus = state.getTotemBonus('production_boost');
-      const totalProdBonus = 1 + prodTechBonus + globalProdTechBonus + prodTotemBonus + globalProdTotemBonus;
+      const prodGovBonus = state.getGovernmentBonus('production_boost', b.type);
+      const globalProdGovBonus = state.getGovernmentBonus('production_boost');
+      const totalProdBonus = 1 + prodTechBonus + globalProdTechBonus + prodTotemBonus + globalProdTotemBonus + prodGovBonus + globalProdGovBonus;
 
       const newStorage = { ...(b.storage || {}) };
       const cap = getBuildingCapacityByType(b.type, b.level);
@@ -1104,9 +1242,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const efficiency = state.recruitEfficiency;
     const trainSpeedTechBonus = calculateTechBonus(state.technologies, 'train_speed');
     const trainSpeedTotemBonus = state.getTotemBonus('train_speed');
+    const trainSpeedGovBonus = state.getGovernmentBonus('train_speed');
     const weatherEffects = state.getWeatherEffects();
     const weatherTrainBonus = weatherEffects.trainingSpeedModifier;
-    const scaledDelta = delta * efficiency * (1 + trainSpeedTechBonus + trainSpeedTotemBonus + weatherTrainBonus);
+    const scaledDelta = delta * efficiency * (1 + trainSpeedTechBonus + trainSpeedTotemBonus + weatherTrainBonus + trainSpeedGovBonus);
 
     for (const queue of state.trainingQueue) {
       let newProgress = queue.progress + scaledDelta;
@@ -1235,9 +1374,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         state.getTotemBonus('defense_boost');
       const hpTotemBonus = state.getTotemBonus('hp_boost', w.type) +
         state.getTotemBonus('hp_boost');
-      const atkBonus = atkTechBonus + atkTotemBonus;
-      const defBonus = defTechBonus + defTotemBonus;
-      const hpBonus = hpTechBonus + hpTotemBonus;
+      const atkGovBonus = state.getGovernmentBonus('attack_boost', w.type) +
+        state.getGovernmentBonus('attack_boost');
+      const defGovBonus = state.getGovernmentBonus('defense_boost', w.type) +
+        state.getGovernmentBonus('defense_boost');
+      const hpGovBonus = state.getGovernmentBonus('hp_boost', w.type) +
+        state.getGovernmentBonus('hp_boost');
+      const atkBonus = atkTechBonus + atkTotemBonus + atkGovBonus;
+      const defBonus = defTechBonus + defTotemBonus + defGovBonus;
+      const hpBonus = hpTechBonus + hpTotemBonus + hpGovBonus;
 
       return {
         ...w,
@@ -3416,9 +3561,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         state.getTotemBonus('defense_boost');
       const hpTotemBonus = state.getTotemBonus('hp_boost', w.type) +
         state.getTotemBonus('hp_boost');
-      const atkBonus = atkTechBonus + atkTotemBonus;
-      const defBonus = defTechBonus + defTotemBonus;
-      const hpBonus = hpTechBonus + hpTotemBonus;
+      const atkGovBonus = state.getGovernmentBonus('attack_boost', w.type) +
+        state.getGovernmentBonus('attack_boost');
+      const defGovBonus = state.getGovernmentBonus('defense_boost', w.type) +
+        state.getGovernmentBonus('defense_boost');
+      const hpGovBonus = state.getGovernmentBonus('hp_boost', w.type) +
+        state.getGovernmentBonus('hp_boost');
+      const atkBonus = atkTechBonus + atkTotemBonus + atkGovBonus;
+      const defBonus = defTechBonus + defTotemBonus + defGovBonus;
+      const hpBonus = hpTechBonus + hpTotemBonus + hpGovBonus;
 
       return {
         ...w,
@@ -3728,6 +3879,742 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { seasonChanged, weatherChanged };
   },
 
+  getGovernmentBonus: (effectType, target) => {
+    const state = get();
+    return calculateGovernmentBonus(state, effectType, target);
+  },
+
+  canResearchPolicy: (policyId) => {
+    const state = get();
+    const policy = getPolicyById(policyId);
+    if (!policy) return { canResearch: false, reason: '未知政策' };
+
+    if (state.government.completedPolicies.includes(policyId)) {
+      return { canResearch: false, reason: '政策已实施' };
+    }
+
+    if (state.government.researchingPolicy?.policyId === policyId) {
+      return { canResearch: false, reason: '政策研究中' };
+    }
+
+    if (!state.government.availablePolicies.includes(policyId)) {
+      return { canResearch: false, reason: '政策未解锁' };
+    }
+
+    if (!state.government.unlockedPolicyCategories.includes(policy.category)) {
+      return { canResearch: false, reason: `${policy.category}类政策未解锁` };
+    }
+
+    if (state.government.policyPoints < policy.cost) {
+      return { canResearch: false, reason: `政策点不足（需要${policy.cost}）` };
+    }
+
+    if (policy.requires) {
+      for (const req of policy.requires) {
+        if (req.type === 'policy' && req.id) {
+          if (!state.government.completedPolicies.includes(req.id)) {
+            const reqPolicy = getPolicyById(req.id);
+            return { canResearch: false, reason: `需要先实施：${reqPolicy?.name || req.id}` };
+          }
+        }
+        if (req.type === 'trait' && req.attribute && req.minValue) {
+          const chief = state.government.chieftain.current;
+          const attrValue = chief ? chief.attributes[req.attribute] : 0;
+          if (!chief || (attrValue ?? 0) < req.minValue) {
+            return { canResearch: false, reason: `首领${getTraitName(req.attribute)}不足（需要${req.minValue}）` };
+          }
+        }
+        if (req.type === 'day' && req.minValue) {
+          if (state.day < req.minValue) {
+            return { canResearch: false, reason: `需要${req.minValue}天后` };
+          }
+        }
+      }
+    }
+
+    if (policy.mutuallyExclusive) {
+      for (const exclusiveId of policy.mutuallyExclusive) {
+        if (state.government.completedPolicies.includes(exclusiveId)) {
+          const exclusivePolicy = getPolicyById(exclusiveId);
+          return { canResearch: false, reason: `与已实施的${exclusivePolicy?.name || exclusiveId}冲突` };
+        }
+      }
+    }
+
+    return { canResearch: true };
+  },
+
+  startPolicyResearch: (policyId) => {
+    const state = get();
+    const check = state.canResearchPolicy(policyId);
+    if (!check.canResearch) {
+      return { success: false, message: check.reason || '无法研究' };
+    }
+
+    const policy = getPolicyById(policyId)!;
+    const chief = state.government.chieftain.current;
+    const stewardship = chief?.attributes.stewardship || 5;
+    const total = getPolicyResearchTime(policy, stewardship);
+
+    const newGovernment = {
+      ...state.government,
+      policyPoints: state.government.policyPoints - policy.cost,
+      researchingPolicy: {
+        policyId,
+        progress: 0,
+        total,
+        startedAt: Date.now(),
+      },
+    };
+
+    set({ government: newGovernment });
+    return { success: true, message: `开始研究：${policy.name}` };
+  },
+
+  cancelPolicyResearch: () => {
+    const state = get();
+    if (!state.government.researchingPolicy) return;
+    const policy = getPolicyById(state.government.researchingPolicy.policyId);
+    const refund = policy ? Math.floor(policy.cost * 0.5) : 0;
+
+    set({
+      government: {
+        ...state.government,
+        researchingPolicy: null,
+        policyPoints: Math.min(state.government.maxPolicyPoints, state.government.policyPoints + refund),
+      },
+    });
+  },
+
+  processPolicyResearch: (delta) => {
+    const state = get();
+    const researching = state.government.researchingPolicy;
+    if (!researching) return;
+
+    const chief = state.government.chieftain.current;
+    const researchSpeedBonus = state.getGovernmentBonus('research_speed');
+    const cunningBonus = chief?.attributes.cunning ? (chief.attributes.cunning - 5) * 0.02 : 0;
+    const scaledDelta = delta * (1 + researchSpeedBonus) * (1 + cunningBonus);
+
+    const newProgress = researching.progress + scaledDelta;
+
+    if (newProgress >= researching.total) {
+      const policy = getPolicyById(researching.policyId);
+      if (!policy) {
+        set({ government: { ...state.government, researchingPolicy: null } });
+        return;
+      }
+
+      const newActivePolicy: ActivePolicy = {
+        id: generateId(),
+        policyId: policy.id,
+        activatedAt: Date.now(),
+        activatedDay: Math.floor(state.day),
+      };
+
+      const newCompleted = [...state.government.completedPolicies, policy.id];
+      const newAvailable = [...state.government.availablePolicies];
+
+      for (const p of POLICIES) {
+        if (p.tier === policy.tier + 1 && !newAvailable.includes(p.id)) {
+          const unlockedByThis = p.requires?.some(r => r.type === 'policy' && r.id === policy.id);
+          if (unlockedByThis || (p.tier === policy.tier + 1 && policy.category === p.category)) {
+            newAvailable.push(p.id);
+          }
+        }
+      }
+
+      const unlockNewCategory = policy.tier >= 2 && policy.category === 'military'
+        && !state.government.unlockedPolicyCategories.includes('diplomacy');
+      const unlockReligion = policy.tier >= 2 && (policy.category === 'culture')
+        && !state.government.unlockedPolicyCategories.includes('religion');
+      const unlockLaw = policy.tier >= 2 && (policy.category === 'economy')
+        && !state.government.unlockedPolicyCategories.includes('law');
+
+      let newCategories = [...state.government.unlockedPolicyCategories];
+      if (unlockNewCategory) newCategories.push('diplomacy');
+      if (unlockReligion) newCategories.push('religion');
+      if (unlockLaw) newCategories.push('law');
+
+      const newUnitPref = { ...state.government.unitPreference };
+      if (chief) {
+        newUnitPref.preferred = getPreferredWarriorType(chief.attributes);
+      }
+
+      const taxPolicyBonuses: Partial<Record<ResourceType, number>> = {};
+      for (const effect of policy.effects) {
+        if (effect.type.startsWith('tax_')) {
+          const res = effect.type.replace('tax_', '') as ResourceType;
+          taxPolicyBonuses[res] = (taxPolicyBonuses[res] || 0) + effect.value;
+        }
+      }
+
+      const newTaxRates = { ...state.government.taxRates };
+      for (const [res, bonus] of Object.entries(taxPolicyBonuses)) {
+        newTaxRates[res as ResourceType] = Math.min(0.5, newTaxRates[res as ResourceType] + (bonus as number));
+      }
+
+      let loyaltyChange = 0;
+      for (const effect of policy.effects) {
+        if (effect.type === 'loyalty_boost') loyaltyChange += effect.value * 100;
+      }
+      const newLoyalty = Math.min(100, state.loyalty + loyaltyChange);
+
+      set({
+        government: {
+          ...state.government,
+          activePolicies: [...state.government.activePolicies, newActivePolicy],
+          completedPolicies: newCompleted,
+          availablePolicies: Array.from(new Set(newAvailable)),
+          researchingPolicy: null,
+          unlockedPolicyCategories: Array.from(new Set(newCategories)),
+          unitPreference: newUnitPref,
+          taxRates: newTaxRates,
+        },
+        loyalty: newLoyalty,
+        recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+      });
+    } else {
+      set({
+        government: {
+          ...state.government,
+          researchingPolicy: { ...researching, progress: newProgress },
+        },
+      });
+    }
+  },
+
+  abdicateChieftain: (heirId) => {
+    const state = get();
+    const current = state.government.chieftain.current;
+    if (!current) return { success: false, message: '无在位首领' };
+
+    if (state.government.chieftain.inheritanceType === 'abdication' && current.age < 50) {
+      return { success: false, message: '首领未满50岁，尚未到禅让之时' };
+    }
+
+    let selectedHeir: Heir | null = null;
+
+    switch (state.government.chieftain.inheritanceType) {
+      case 'hereditary':
+        selectedHeir = state.government.chieftain.heirs
+          .sort((a, b) => b.claimStrength - a.claimStrength)[0] || null;
+        break;
+      case 'election':
+        selectedHeir = state.government.chieftain.heirs
+          .sort((a, b) => b.support - a.support)[0] || null;
+        break;
+      case 'challenge':
+        selectedHeir = state.government.chieftain.heirs
+          .sort((a, b) => b.promisedAttributes.martial - a.promisedAttributes.martial)[0] || null;
+        break;
+      case 'abdication':
+        selectedHeir = heirId
+          ? state.government.chieftain.heirs.find(h => h.id === heirId) || null
+          : state.government.chieftain.selectedHeirId
+            ? state.government.chieftain.heirs.find(h => h.id === state.government.chieftain.selectedHeirId) || null
+            : state.government.chieftain.heirs[0] || null;
+        break;
+    }
+
+    if (!selectedHeir) {
+      selectedHeir = generateHeirs(current, 1)[0];
+    }
+
+    const achievements = generateGovernmentAchievements(
+      current,
+      current.reignDays,
+      state.totalWins,
+      state.government.completedPolicies
+    );
+
+    const retiredChief: Chieftain = {
+      ...current,
+      reignDays: Math.floor(state.day) - current.startedDay,
+      achievements,
+      causeOfDeath: '禅让退位',
+    };
+
+    const newChief: Chieftain = {
+      id: `chieftain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: selectedHeir.name,
+      title: getChiefTitleByTrait(selectedHeir.promisedAttributes),
+      age: selectedHeir.age,
+      maxAge: 65 + Math.floor(Math.random() * 25),
+      traits: selectedHeir.traits,
+      attributes: selectedHeir.promisedAttributes,
+      personality: selectedHeir.personality,
+      personalityDescription: `${selectedHeir.relation}${selectedHeir.name}，继承大统。`,
+      icon: selectedHeir.avatar,
+      startedDay: Math.floor(state.day),
+      predecessorId: current.id,
+      dynastyName: current.dynastyName,
+      dynasty: current.dynastyName,
+      reignDays: 0,
+      achievements: [],
+      avatar: selectedHeir.avatar,
+    };
+
+    const newHeirs = generateHeirs(newChief, 3);
+
+    let newLoyalty = state.loyalty + INHERITANCE_CONFIGS[state.government.chieftain.inheritanceType].loyaltyModifier;
+    newLoyalty = Math.max(0, Math.min(100, newLoyalty + (selectedHeir.support / 10)));
+
+    const unlockedCats = [...state.government.unlockedPolicyCategories];
+    if (newChief.attributes.diplomacy >= 5 && !unlockedCats.includes('diplomacy')) unlockedCats.push('diplomacy');
+    if (newChief.attributes.piety >= 5 && !unlockedCats.includes('religion')) unlockedCats.push('religion');
+    if (newChief.attributes.stewardship >= 6 && !unlockedCats.includes('law')) unlockedCats.push('law');
+
+    set({
+      government: {
+        ...state.government,
+        chieftain: {
+          ...state.government.chieftain,
+          current: newChief,
+          history: [...state.government.chieftain.history, retiredChief],
+          heirs: newHeirs,
+          selectedHeirId: null,
+          abdicationAvailable: newChief.age >= 50,
+        },
+        unitPreference: {
+          primary: 'balanced',
+          preferred: getPreferredWarriorType(newChief.attributes),
+          bonus: {},
+        },
+        unlockedPolicyCategories: unlockedCats,
+      },
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    return { success: true, message: `${newChief.name}继承首领之位！` };
+  },
+
+  selectHeir: (heirId) => {
+    const state = get();
+    const heir = state.government.chieftain.heirs.find(h => h.id === heirId);
+    if (!heir) return { success: false, message: '继承人不存在' };
+
+    set({
+      government: {
+        ...state.government,
+        chieftain: {
+          ...state.government.chieftain,
+          selectedHeirId: heirId,
+        },
+      },
+    });
+    return { success: true, message: `已立${heir.name}为储君` };
+  },
+
+  changeInheritanceType: (type) => {
+    const state = get();
+    if (!state.government.chieftain.current) return { success: false, message: '无在位首领' };
+    const chief = state.government.chieftain.current;
+
+    let loyaltyCost = 0;
+    if (type !== state.government.chieftain.inheritanceType) {
+      switch (type) {
+        case 'hereditary': loyaltyCost = -3; break;
+        case 'election': loyaltyCost = 5; break;
+        case 'challenge': loyaltyCost = -8; break;
+        case 'abdication': loyaltyCost = 2; break;
+      }
+    }
+
+    if (chief.attributes.charisma < 5 && loyaltyCost < 0) {
+      return { success: false, message: '首领魅力不足，无法推动继承制改革' };
+    }
+
+    const newLoyalty = Math.max(0, Math.min(100, state.loyalty + loyaltyCost));
+
+    set({
+      government: {
+        ...state.government,
+        chieftain: {
+          ...state.government.chieftain,
+          inheritanceType: type,
+        },
+      },
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    return { success: true, message: `改为${INHERITANCE_CONFIGS[type].name}` };
+  },
+
+  adjustTaxRate: (resource, rate) => {
+    const state = get();
+    if (rate < 0 || rate > 0.5) return { success: false, message: '税率范围0%-50%' };
+
+    const chief = state.government.chieftain.current;
+    const maxRate = 0.2 + (chief?.attributes.stewardship || 5) * 0.03;
+    if (rate > maxRate) {
+      return { success: false, message: `首领管理能力上限${Math.floor(maxRate * 100)}%` };
+    }
+
+    const oldRate = state.government.taxRates[resource];
+    const rateDiff = rate - oldRate;
+    let loyaltyChange = -rateDiff * 200;
+
+    const newLoyalty = Math.max(0, Math.min(100, state.loyalty + loyaltyChange));
+
+    set({
+      government: {
+        ...state.government,
+        taxRates: {
+          ...state.government.taxRates,
+          [resource]: rate,
+        },
+      },
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    return { success: true, message: `调整${resource}税率为${Math.floor(rate * 100)}%` };
+  },
+
+  regenerateTribeName: () => {
+    const newName = generateTribeName();
+    set({ tribeName: newName });
+    return newName;
+  },
+
+  refreshHeirs: () => {
+    const state = get();
+    const chief = state.government.chieftain.current;
+    if (!chief) return;
+
+    const newHeirs = generateHeirs(chief, 3);
+    set({
+      government: {
+        ...state.government,
+        chieftain: {
+          ...state.government.chieftain,
+          heirs: newHeirs,
+          selectedHeirId: null,
+        },
+      },
+    });
+  },
+
+  unlockPolicyCategory: (category) => {
+    const state = get();
+    if (state.government.unlockedPolicyCategories.includes(category)) {
+      return { success: false, message: '该类政策已解锁' };
+    }
+    const cost = 40;
+    if (state.government.policyPoints < cost) {
+      return { success: false, message: `需要${cost}政策点` };
+    }
+
+    const categoryPolicies = getPoliciesByCategory(category).filter(p => p.tier === 1).map(p => p.id);
+
+    set({
+      government: {
+        ...state.government,
+        policyPoints: state.government.policyPoints - cost,
+        unlockedPolicyCategories: [...state.government.unlockedPolicyCategories, category],
+        availablePolicies: Array.from(new Set([...state.government.availablePolicies, ...categoryPolicies])),
+      },
+    });
+    return { success: true, message: `解锁${POLICY_CATEGORIES[category]?.name || category}类政策` };
+  },
+
+  activatePolicy: (policyId) => {
+    const state = get();
+    if (!state.government.completedPolicies.includes(policyId)) {
+      return { success: false, message: '政策尚未研究完成' };
+    }
+    if (state.government.activePolicies.some(ap => ap.policyId === policyId)) {
+      return { success: false, message: '该政策已生效' };
+    }
+    const policy = getPolicyById(policyId);
+    if (!policy) return { success: false, message: '未知政策' };
+
+    if (policy.mutuallyExclusive?.some(id => state.government.activePolicies.some(ap => ap.policyId === id))) {
+      return { success: false, message: '存在互斥政策' };
+    }
+
+    const newActive: ActivePolicy = {
+      id: `active-${Date.now()}`,
+      policyId,
+      activatedAt: Date.now(),
+      activatedDay: Math.floor(state.day),
+    };
+
+    set({
+      government: {
+        ...state.government,
+        activePolicies: [...state.government.activePolicies, newActive],
+      },
+    });
+    return { success: true, message: `${policy.name}已生效` };
+  },
+
+  deactivatePolicy: (policyId) => {
+    const state = get();
+    if (!state.government.activePolicies.some(ap => ap.policyId === policyId)) {
+      return { success: false, message: '该政策未生效' };
+    }
+    const policy = getPolicyById(policyId);
+    set({
+      government: {
+        ...state.government,
+        activePolicies: state.government.activePolicies.filter(ap => ap.policyId !== policyId),
+        policyCooldowns: {
+          ...state.government.policyCooldowns,
+          [policyId]: 30000,
+        },
+      },
+    });
+    return { success: true, message: `${policy?.name || policyId}已暂停` };
+  },
+
+  isPolicyActive: (policyId) => {
+    return get().government.activePolicies.some(ap => ap.policyId === policyId);
+  },
+
+  setTaxRate: (resource, rate) => {
+    const state = get();
+    set({
+      government: {
+        ...state.government,
+        taxRates: {
+          ...state.government.taxRates,
+          [resource]: Math.max(0, Math.min(0.5, rate)),
+        },
+      },
+    });
+  },
+
+  setUnitPreference: (pref) => {
+    const state = get();
+    set({
+      government: {
+        ...state.government,
+        unitPreference: pref,
+      },
+    });
+  },
+
+  abdicateChief: (heirId) => {
+    return get().abdicateChieftain(heirId || '');
+  },
+
+  processGovernmentTick: (delta) => {
+    const state = get();
+    const gov = state.government;
+    const chief = gov.chieftain.current;
+    if (!chief) return;
+
+    const secondsPerDay = 60;
+    const dayIncrement = delta / secondsPerDay;
+
+    const newReignDays = chief.reignDays + dayIncrement;
+    const effectiveGov = state.government;
+    const traitBonuses = calculateTraitBonus(chief.attributes);
+
+    const pointGainPerDay = getPolicyPointGainPerDay(chief, effectiveGov.activePolicies);
+    const researchBonus = effectiveGov.researchingPolicy ? 0 : 1;
+    const pointGain = pointGainPerDay * dayIncrement * researchBonus;
+
+    const newMaxPoints = getMaxPolicyPoints(state.day);
+    let newPoints = Math.min(newMaxPoints, effectiveGov.policyPoints + pointGain);
+
+    let newChiefAge = chief.age;
+    let chiefDied = false;
+    let deathCause = '';
+
+    const ageTickChance = dayIncrement * 0.01;
+    if (Math.random() < ageTickChance) {
+      newChiefAge = chief.age + 1;
+    }
+
+    if (newChiefAge >= chief.maxAge) {
+      chiefDied = true;
+      deathCause = '寿终正寝';
+    } else if (newChiefAge > 50 && Math.random() < 0.0005 * dayIncrement) {
+      chiefDied = true;
+      const causes = ['病逝', '意外身亡', '积劳成疾', '神秘死亡'];
+      deathCause = causes[Math.floor(Math.random() * causes.length)];
+    }
+
+    const newReignBonus = getReignBonus(newReignDays);
+
+    const reignBonuses = {
+      totalDays: newReignDays,
+      bonusAttack: newReignBonus.attackBonus,
+      bonusProduction: newReignBonus.productionBonus,
+      bonusLoyalty: newReignBonus.loyaltyBonus,
+      dynastyRenown: newReignBonus.dynastyRenown,
+    };
+
+    let successionCrisis = gov.chieftain.successionCrisis;
+    let crisisTimer = gov.chieftain.successionCrisisTimer;
+    if (chiefDied) {
+      if (!gov.chieftain.selectedHeirId && gov.chieftain.heirs.length === 0) {
+        successionCrisis = true;
+        crisisTimer = 60;
+      }
+    }
+
+    const newTaxResources: Partial<Resources> = {};
+    const taxTickChance = dayIncrement * 0.05;
+    if (Math.random() < taxTickChance && state.population > 0) {
+      const perPerson = 0.2;
+      const pop = state.population;
+      for (const [res, rate] of Object.entries(effectiveGov.taxRates) as [ResourceType, number][]) {
+        const stewardshipBonus = 1 + traitBonuses.taxEfficiency;
+        const amount = Math.floor(pop * perPerson * rate * stewardshipBonus);
+        if (amount > 0) {
+          newTaxResources[res] = amount;
+        }
+      }
+    }
+
+    if (Object.keys(newTaxResources).length > 0) {
+      state.addResources(newTaxResources);
+    }
+
+    let newAbdication = gov.chieftain.abdicationAvailable;
+    if (newChiefAge >= 50 && !gov.chieftain.abdicationAvailable) {
+      newAbdication = true;
+    }
+
+    const prestigeGain = Math.floor(newReignDays / 30) * 0.1
+      + (gov.completedPolicies.length * 0.5)
+      + (state.totalWins * 0.3);
+
+    set({
+      government: {
+        ...effectiveGov,
+        chieftain: {
+          ...gov.chieftain,
+          current: {
+            ...chief,
+            age: newChiefAge,
+            reignDays: newReignDays,
+          },
+          successionCrisis,
+          successionCrisisTimer: crisisTimer,
+          abdicationAvailable: newAbdication,
+        },
+        policyPoints: newPoints,
+        maxPolicyPoints: newMaxPoints,
+        policyPointRate: pointGainPerDay,
+        reignBonuses,
+        lastPolicyPointTick: Date.now(),
+        prestige: Math.floor(prestigeGain),
+      },
+    });
+
+    if (chiefDied && !successionCrisis) {
+      const achievements = generateGovernmentAchievements(
+        { ...chief, age: newChiefAge, reignDays: newReignDays },
+        newReignDays,
+        state.totalWins,
+        effectiveGov.completedPolicies
+      );
+
+      const deceasedChief: Chieftain = {
+        ...chief,
+        age: newChiefAge,
+        reignDays: newReignDays,
+        achievements,
+        causeOfDeath: deathCause,
+      };
+
+      let selectedHeir: Heir | null = null;
+
+      if (gov.chieftain.selectedHeirId) {
+        selectedHeir = gov.chieftain.heirs.find(h => h.id === gov.chieftain.selectedHeirId) || null;
+      }
+
+      if (!selectedHeir && gov.chieftain.heirs.length > 0) {
+        switch (gov.chieftain.inheritanceType) {
+          case 'hereditary':
+            selectedHeir = [...gov.chieftain.heirs].sort((a, b) => b.claimStrength - a.claimStrength)[0];
+            break;
+          case 'election':
+            selectedHeir = [...gov.chieftain.heirs].sort((a, b) => b.support - a.support)[0];
+            break;
+          case 'challenge':
+            selectedHeir = [...gov.chieftain.heirs].sort((a, b) => b.promisedAttributes.martial - a.promisedAttributes.martial)[0];
+            break;
+          case 'abdication':
+            selectedHeir = gov.chieftain.heirs[0];
+            break;
+        }
+      }
+
+      if (!selectedHeir) {
+        selectedHeir = generateHeirs(deceasedChief, 1)[0];
+      }
+
+      const heirTraitList = selectedHeir.traits;
+      const heirAttrs = selectedHeir.promisedAttributes;
+      const newChiefInherited: Chieftain = {
+        id: `chieftain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: selectedHeir.name,
+        title: getChiefTitleByTrait(heirAttrs),
+        age: selectedHeir.age,
+        maxAge: 65 + Math.floor(Math.random() * 25),
+        traits: heirTraitList,
+        attributes: heirAttrs,
+        personality: selectedHeir.personality,
+        personalityDescription: `${selectedHeir.relation}${selectedHeir.name}，在${deathCause}后继承首领之位。`,
+        icon: selectedHeir.avatar,
+        startedDay: Math.floor(state.day),
+        predecessorId: chief.id,
+        dynastyName: chief.dynastyName,
+        dynasty: chief.dynastyName,
+        reignDays: 0,
+        achievements: [],
+        avatar: selectedHeir.avatar,
+      };
+
+      const newHeirs = generateHeirs(newChiefInherited, 3);
+
+      let inheritLoyalty = state.loyalty + INHERITANCE_CONFIGS[gov.chieftain.inheritanceType].loyaltyModifier;
+      inheritLoyalty = Math.max(0, Math.min(100, inheritLoyalty + (selectedHeir.support / 12) - 5));
+
+      const newUnlockedCats = [...gov.unlockedPolicyCategories];
+      if (newChiefInherited.attributes.diplomacy >= 5 && !newUnlockedCats.includes('diplomacy')) newUnlockedCats.push('diplomacy');
+      if (newChiefInherited.attributes.piety >= 5 && !newUnlockedCats.includes('religion')) newUnlockedCats.push('religion');
+      if (newChiefInherited.attributes.stewardship >= 6 && !newUnlockedCats.includes('law')) newUnlockedCats.push('law');
+
+      const availableAfter = [...gov.availablePolicies];
+      for (const p of POLICIES) {
+        if (p.tier === 1 && !availableAfter.includes(p.id) && newUnlockedCats.includes(p.category)) {
+          availableAfter.push(p.id);
+        }
+      }
+
+      set({
+        government: {
+          ...effectiveGov,
+          chieftain: {
+            ...gov.chieftain,
+            current: newChiefInherited,
+            history: [...gov.chieftain.history, deceasedChief],
+            heirs: newHeirs,
+            selectedHeirId: null,
+          },
+          unitPreference: {
+            primary: 'balanced',
+            preferred: getPreferredWarriorType(newChiefInherited.attributes),
+            bonus: {},
+          },
+          unlockedPolicyCategories: Array.from(new Set(newUnlockedCats)),
+          availablePolicies: Array.from(new Set(availableAfter)),
+        },
+        loyalty: inheritLoyalty,
+        recruitEfficiency: calculateRecruitEfficiency(inheritLoyalty, state.activeEvents),
+      });
+    }
+  },
+
   tick: (delta) => {
     const state = get();
 
@@ -3754,6 +4641,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processSpoilageTick(delta);
     state.processTotemTick(delta);
     state.processNightRaidTick(delta);
+    state.processPolicyResearch(delta);
+    state.processGovernmentTick(delta);
 
     const ending = state.checkForEnding();
     if (ending) {

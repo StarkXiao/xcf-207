@@ -736,6 +736,88 @@ export interface TotemState {
   totalBlessings: number;
 }
 
+export type TrapType = 'spike' | 'fire' | 'poison' | 'net' | 'boulder';
+
+export interface TrapConfig {
+  id: TrapType;
+  name: string;
+  icon: string;
+  description: string;
+  cost: Partial<Resources>;
+  damage: number;
+  effect?: 'slow' | 'poison' | 'stun' | 'burn';
+  effectValue?: number;
+  maxCount: number;
+  requires?: { building: BuildingType; level: number };
+}
+
+export interface Trap {
+  id: string;
+  type: TrapType;
+  triggered: boolean;
+  position: number;
+}
+
+export interface GarrisonSlot {
+  id: string;
+  warriorType: WarriorType | null;
+  warriorId: string | null;
+  position: 'front' | 'middle' | 'back';
+}
+
+export type NightRaidPhase = 'idle' | 'warning' | 'preparing' | 'fighting' | 'result';
+
+export interface NightRaidEnemy {
+  id: string;
+  type: EnemyType;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  affectedByTrap?: boolean;
+  trapDamage?: number;
+}
+
+export interface NightRaidReport {
+  id: string;
+  wave: number;
+  result: 'victory' | 'defeat';
+  timestamp: number;
+  enemiesDefeated: number;
+  trapsTriggered: number;
+  casualties: number;
+  rewards: Partial<Resources>;
+  log: string[];
+  claimed: boolean;
+}
+
+export interface NightRaid {
+  id: string;
+  wave: number;
+  phase: NightRaidPhase;
+  warningCountdown: number;
+  preparationTime: number;
+  enemies: NightRaidEnemy[];
+  traps: Trap[];
+  garrison: GarrisonSlot[];
+  rewards: Partial<Resources>;
+  result: 'pending' | 'victory' | 'defeat';
+  battleLog: string[];
+}
+
+export interface NightRaidState {
+  activeRaid: NightRaid | null;
+  reports: NightRaidReport[];
+  totalRaids: number;
+  totalRaidWins: number;
+  totalRaidLosses: number;
+  raidCooldown: number;
+  nextRaidIn: number;
+  availableTraps: Record<TrapType, number>;
+  placedTraps: Trap[];
+  garrisonWarriors: string[];
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -787,4 +869,5 @@ export interface GameState {
   lastOnlineTime: number;
   gameEnding: GameEnding | null;
   totem: TotemState;
+  nightRaid: NightRaidState;
 }

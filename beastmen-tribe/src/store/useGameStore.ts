@@ -80,6 +80,19 @@ import {
   canActivateBlessing as checkCanActivateBlessing,
   getAvailableBlessings,
 } from '../data/totems';
+import {
+  TRAPS,
+  BASE_WARNING_TIME,
+  BASE_PREPARATION_TIME,
+  BASE_RAID_COOLDOWN,
+  MAX_REPORTS,
+  createInitialNightRaidState,
+  generateNightRaidEnemies,
+  calculateRaidRewards,
+  createGarrisonSlots,
+  calculateTrapDamage,
+  generateId as generateNightRaidId,
+} from '../data/nightRaid';
 import type {
   ResourceType,
   ResourceCapacity,
@@ -90,6 +103,10 @@ import type {
   TotemUnlocked,
   ActiveBlessing,
   TotemEffectType,
+  TrapType,
+  Trap,
+  NightRaid,
+  NightRaidReport,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -389,6 +406,7 @@ const createInitialState = (): GameState => {
     totalTrades: 0,
     gameEnding: null,
     totem: createInitialTotemState(),
+    nightRaid: createInitialNightRaidState(),
   };
 };
 
@@ -557,6 +575,23 @@ const loadSave = (): GameState => {
         state.unlockedBuildings = [...state.unlockedBuildings, 'totem_altar'];
       }
 
+      state.nightRaid = parsed.nightRaid
+        ? {
+            ...createInitialNightRaidState(),
+            ...parsed.nightRaid,
+            reports: parsed.nightRaid.reports || [],
+            availableTraps: parsed.nightRaid.availableTraps || {
+              spike: 0,
+              fire: 0,
+              poison: 0,
+              net: 0,
+              boulder: 0,
+            },
+            placedTraps: parsed.nightRaid.placedTraps || [],
+            garrisonWarriors: parsed.nightRaid.garrisonWarriors || [],
+          }
+        : createInitialNightRaidState();
+
       return state;
     }
   } catch (e) {
@@ -652,6 +687,16 @@ interface GameStore extends GameState {
   performOffering: (offerId: string) => { success: boolean; message: string };
   activateBlessing: (blessingType: BlessingType) => { success: boolean; message: string };
   processTotemTick: (delta: number) => void;
+
+  buildTrap: (trapType: TrapType) => { success: boolean; message: string };
+  placeTrap: (trapType: TrapType) => { success: boolean; message: string };
+  removeTrap: (trapId: string) => void;
+  assignGarrison: (warriorId: string) => boolean;
+  unassignGarrison: (warriorId: string) => void;
+  startNightRaid: () => void;
+  startNightRaidBattle: () => { result: 'victory' | 'defeat'; log: string[] };
+  claimRaidReward: (reportId: string) => boolean;
+  processNightRaidTick: (delta: number) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -3176,6 +3221,417 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
+  buildTrap: (trapType) => {
+    const state = get();
+    const config = TRAPS[trapType];
+    if (!config) return { success: false, message: '未知陷阱类型' };
+
+    if (config.requires) {
+      const reqBuilding = state.buildings.find(
+        (b) => b.type === config.requires!.building && !b.isBuilding
+      );
+      if (!reqBuilding || reqBuilding.level < config.requires.level) {
+        return { success: false, message: `需要 ${BUILDINGS[config.requires.building].name} Lv.${config.requires.level}` };
+      }
+    }
+
+    if (!state.canAfford(config.cost)) {
+      return { success: false, message: '资源不足' };
+    }
+
+    state.spendResources(config.cost);
+
+    const newAvailableTraps = { ...state.nightRaid.availableTraps };
+    newAvailableTraps[trapType] = (newAvailableTraps[trapType] || 0) + 1;
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        availableTraps: newAvailableTraps,
+      },
+    });
+
+    return { success: true, message: `成功建造 ${config.name}！` };
+  },
+
+  placeTrap: (trapType) => {
+    const state = get();
+    const config = TRAPS[trapType];
+    if (!config) return { success: false, message: '未知陷阱类型' };
+
+    const available = state.nightRaid.availableTraps[trapType] || 0;
+    if (available <= 0) {
+      return { success: false, message: '没有可用的陷阱' };
+    }
+
+    const placedCount = state.nightRaid.placedTraps.filter((t) => t.type === trapType).length;
+    if (placedCount >= config.maxCount) {
+      return { success: false, message: `该类型陷阱已达上限（${config.maxCount}个）` };
+    }
+
+    const newTrap: Trap = {
+      id: generateNightRaidId(),
+      type: trapType,
+      triggered: false,
+      position: state.nightRaid.placedTraps.length,
+    };
+
+    const newAvailableTraps = { ...state.nightRaid.availableTraps };
+    newAvailableTraps[trapType] = available - 1;
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        placedTraps: [...state.nightRaid.placedTraps, newTrap],
+        availableTraps: newAvailableTraps,
+      },
+    });
+
+    return { success: true, message: `${config.name} 已布置！` };
+  },
+
+  removeTrap: (trapId) => {
+    const state = get();
+    const trap = state.nightRaid.placedTraps.find((t) => t.id === trapId);
+    if (!trap) return;
+
+    const newAvailableTraps = { ...state.nightRaid.availableTraps };
+    newAvailableTraps[trap.type] = (newAvailableTraps[trap.type] || 0) + 1;
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        placedTraps: state.nightRaid.placedTraps.filter((t) => t.id !== trapId),
+        availableTraps: newAvailableTraps,
+      },
+    });
+  },
+
+  assignGarrison: (warriorId) => {
+    const state = get();
+    const warrior = state.warriors.find((w) => w.id === warriorId);
+    if (!warrior) return false;
+
+    if (state.nightRaid.garrisonWarriors.includes(warriorId)) return false;
+
+    const activeRaid = state.nightRaid.activeRaid;
+    if (activeRaid && activeRaid.phase !== 'preparing') return false;
+
+    const newGarrisonWarriors = [...state.nightRaid.garrisonWarriors, warriorId];
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        garrisonWarriors: newGarrisonWarriors,
+      },
+    });
+
+    return true;
+  },
+
+  unassignGarrison: (warriorId) => {
+    const state = get();
+    const activeRaid = state.nightRaid.activeRaid;
+    if (activeRaid && activeRaid.phase !== 'preparing') return;
+
+    if (!state.nightRaid.garrisonWarriors.includes(warriorId)) return;
+
+    const newGarrisonWarriors = state.nightRaid.garrisonWarriors.filter(
+      (id) => id !== warriorId
+    );
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        garrisonWarriors: newGarrisonWarriors,
+      },
+    });
+  },
+
+  startNightRaid: () => {
+    const state = get();
+    if (state.nightRaid.activeRaid) return;
+
+    const wave = Math.floor(state.day / 3) + 1;
+    const enemies = generateNightRaidEnemies(wave, Math.floor(state.day));
+    const rewards = calculateRaidRewards(wave, enemies);
+
+    const raid: NightRaid = {
+      id: generateNightRaidId(),
+      wave,
+      phase: 'warning',
+      warningCountdown: BASE_WARNING_TIME,
+      preparationTime: BASE_PREPARATION_TIME,
+      enemies,
+      traps: state.nightRaid.placedTraps.map((t) => ({ ...t, triggered: false })),
+      garrison: createGarrisonSlots(),
+      rewards,
+      result: 'pending',
+      battleLog: [],
+    };
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        activeRaid: raid,
+      },
+    });
+  },
+
+  startNightRaidBattle: () => {
+    const state = get();
+    const raid = state.nightRaid.activeRaid;
+    if (!raid || raid.phase === 'fighting' || raid.phase === 'result') {
+      return { result: 'defeat' as const, log: ['没有进行中的夜袭'] };
+    }
+
+    const log: string[] = [];
+    let myWarriors = state.warriors
+      .filter((w) => state.nightRaid.garrisonWarriors.includes(w.id))
+      .map((w) => ({ ...w }));
+
+    if (myWarriors.length === 0) {
+      myWarriors = state.warriors.map((w) => ({ ...w }));
+    }
+
+    let enemies = raid.enemies.map((e) => ({ ...e }));
+
+    const wallTechBonus = calculateTechBonus(state.technologies, 'wall_defense');
+    const wallTotemBonus = state.getTotemBonus('wall_defense');
+    const baseWallDefense = calculateWallDefense(state.buildings, state.technologies);
+    const wallDefense = Math.floor(baseWallDefense * (1 + wallTotemBonus) / (1 + wallTechBonus) * (1 + wallTechBonus + wallTotemBonus));
+    const loyaltyBonus = Math.floor(state.loyalty / 20);
+
+    myWarriors = myWarriors.map((w) => {
+      const atkTechBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
+        calculateTechBonus(state.technologies, 'attack_boost');
+      const defTechBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
+        calculateTechBonus(state.technologies, 'defense_boost');
+      const hpTechBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
+        calculateTechBonus(state.technologies, 'hp_boost');
+      const atkTotemBonus = state.getTotemBonus('attack_boost', w.type) +
+        state.getTotemBonus('attack_boost');
+      const defTotemBonus = state.getTotemBonus('defense_boost', w.type) +
+        state.getTotemBonus('defense_boost');
+      const hpTotemBonus = state.getTotemBonus('hp_boost', w.type) +
+        state.getTotemBonus('hp_boost');
+      const atkBonus = atkTechBonus + atkTotemBonus;
+      const defBonus = defTechBonus + defTotemBonus;
+      const hpBonus = hpTechBonus + hpTotemBonus;
+
+      return {
+        ...w,
+        attack: Math.floor(w.attack * (1 + atkBonus)),
+        defense: Math.floor(w.defense * (1 + defBonus)),
+        maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
+        hp: Math.floor(w.hp * (1 + hpBonus)),
+      };
+    });
+
+    log.push(`🌙 第 ${raid.wave} 波夜袭开始！`);
+    log.push(`敌人数量：${enemies.length}`);
+
+    const trapResult = calculateTrapDamage(raid.traps, enemies);
+    enemies = trapResult.updatedEnemies;
+    log.push(...trapResult.damageLog);
+    log.push(`🔺 共触发 ${trapResult.trapsTriggered} 个陷阱`);
+
+    const initialEnemyCount = raid.enemies.length;
+    const trapsTriggered = trapResult.trapsTriggered;
+
+    log.push(`我方防御加成：+${wallDefense}，士气加成：+${loyaltyBonus}`);
+    log.push(`守军数量：${myWarriors.length}`);
+
+    let round = 0;
+    while (myWarriors.length > 0 && enemies.length > 0 && round < 20) {
+      round++;
+      log.push(`--- 回合 ${round} ---`);
+
+      for (const warrior of myWarriors) {
+        if (enemies.length === 0) break;
+        const target = enemies[0];
+        const damage = Math.max(1, warrior.attack + loyaltyBonus * 0.5 - target.defense / 2);
+        target.hp -= damage;
+        log.push(`${WARRIORS[warrior.type].name} 攻击 ${ENEMIES[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
+        if (target.hp <= 0) {
+          enemies.shift();
+          log.push(`💀 ${ENEMIES[target.type].name} 被击败！`);
+        }
+      }
+
+      for (const enemy of enemies) {
+        if (myWarriors.length === 0) break;
+        const target = myWarriors[0];
+        const damage = Math.max(1, enemy.attack - target.defense / 2 - wallDefense / 10);
+        target.hp -= damage;
+        log.push(`${ENEMIES[enemy.type].name} 攻击 ${WARRIORS[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
+        if (target.hp <= 0) {
+          myWarriors.shift();
+          log.push(`☠️ ${WARRIORS[target.type].name} 阵亡！`);
+        }
+      }
+    }
+
+    const victory = enemies.length === 0 && myWarriors.length > 0;
+    log.push(victory ? '🏆 胜利！部落成功抵御夜袭！' : '💔 失败...部落遭受重创');
+
+    const enemiesDefeated = initialEnemyCount - enemies.length;
+
+    const newLoyalty = Math.min(100, state.loyalty + (victory ? 3 : -5));
+    const newPopulation = Math.max(0, state.population + (victory ? 0 : -1));
+
+    if (victory) {
+      log.push(`获得奖励：${Object.entries(raid.rewards).map(([k, v]) => `${k}+${v}`).join(', ')}`);
+    } else {
+      log.push(`人口因战败减少，忠诚下降`);
+    }
+
+    const survivingWarriorIds = myWarriors.map((w) => w.id);
+    const allWarriorIds = state.nightRaid.garrisonWarriors.length > 0
+      ? state.nightRaid.garrisonWarriors
+      : state.warriors.map((w) => w.id);
+    const deadWarriorIds = allWarriorIds.filter((id) => !survivingWarriorIds.includes(id));
+
+    const updatedWarriors = state.warriors.filter((w) => !deadWarriorIds.includes(w.id));
+
+    const report: NightRaidReport = {
+      id: generateNightRaidId(),
+      wave: raid.wave,
+      result: victory ? 'victory' : 'defeat',
+      timestamp: Date.now(),
+      enemiesDefeated,
+      trapsTriggered,
+      casualties: deadWarriorIds.length,
+      rewards: { ...raid.rewards },
+      log,
+      claimed: false,
+    };
+
+    const newReports = [report, ...state.nightRaid.reports].slice(0, MAX_REPORTS);
+
+    const newPlacedTraps = state.nightRaid.placedTraps.map((t) => {
+      const raidTrap = raid.traps.find((rt) => rt.id === t.id);
+      if (raidTrap && raidTrap.triggered) {
+        return { ...t, triggered: true };
+      }
+      return t;
+    });
+
+    set({
+      warriors: updatedWarriors,
+      nightRaid: {
+        ...state.nightRaid,
+        activeRaid: {
+          ...raid,
+          phase: 'result',
+          enemies,
+          result: victory ? 'victory' : 'defeat',
+          battleLog: log,
+        },
+        reports: newReports,
+        totalRaids: state.nightRaid.totalRaids + 1,
+        totalRaidWins: state.nightRaid.totalRaidWins + (victory ? 1 : 0),
+        totalRaidLosses: state.nightRaid.totalRaidLosses + (victory ? 0 : 1),
+        nextRaidIn: BASE_RAID_COOLDOWN,
+        placedTraps: newPlacedTraps,
+        garrisonWarriors: [],
+      },
+      totalWins: state.totalWins + (victory ? 1 : 0),
+      totalLosses: state.totalLosses + (victory ? 0 : 1),
+      loyalty: newLoyalty,
+      population: newPopulation,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    if (victory) {
+      state.updateTaskProgress('win_battles', 1);
+    }
+
+    return { result: victory ? 'victory' : 'defeat', log };
+  },
+
+  claimRaidReward: (reportId) => {
+    const state = get();
+    const report = state.nightRaid.reports.find((r) => r.id === reportId);
+    if (!report || report.claimed || report.result !== 'victory') return false;
+
+    state.addResources(report.rewards);
+
+    const newReports = state.nightRaid.reports.map((r) =>
+      r.id === reportId ? { ...r, claimed: true } : r
+    );
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        reports: newReports,
+      },
+    });
+
+    return true;
+  },
+
+  processNightRaidTick: (delta) => {
+    const state = get();
+    const raid = state.nightRaid.activeRaid;
+    if (!raid) {
+      let nextRaidIn = state.nightRaid.nextRaidIn - delta;
+      if (nextRaidIn <= 0) {
+        nextRaidIn = 0;
+      }
+      if (nextRaidIn !== state.nightRaid.nextRaidIn) {
+        set({
+          nightRaid: {
+            ...state.nightRaid,
+            nextRaidIn,
+          },
+        });
+      }
+      return;
+    }
+
+    if (raid.phase === 'warning') {
+      const newCountdown = raid.warningCountdown - delta;
+      if (newCountdown <= 0) {
+        set({
+          nightRaid: {
+            ...state.nightRaid,
+            activeRaid: {
+              ...raid,
+              phase: 'preparing',
+              warningCountdown: 0,
+            },
+          },
+        });
+      } else {
+        set({
+          nightRaid: {
+            ...state.nightRaid,
+            activeRaid: {
+              ...raid,
+              warningCountdown: newCountdown,
+            },
+          },
+        });
+      }
+    } else if (raid.phase === 'preparing') {
+      const newPrepTime = raid.preparationTime - delta;
+      if (newPrepTime <= 0) {
+        state.startNightRaidBattle();
+      } else {
+        set({
+          nightRaid: {
+            ...state.nightRaid,
+            activeRaid: {
+              ...raid,
+              preparationTime: newPrepTime,
+            },
+          },
+        });
+      }
+    }
+  },
+
   checkForEnding: () => {
     const state = get();
     return checkEndingConditions(state);
@@ -3275,6 +3731,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processTransportTick(delta);
     state.processSpoilageTick(delta);
     state.processTotemTick(delta);
+    state.processNightRaidTick(delta);
 
     const ending = state.checkForEnding();
     if (ending) {

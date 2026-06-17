@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useGameStore } from '../store/useGameStore';
-import { ENEMIES, BOSSES, BOSS_WAVE_INTERVAL, isBossWave as checkIsBossWave } from '../data/enemies';
+import { ENEMIES, BOSSES, isBossWave as checkIsBossWave } from '../data/enemies';
 import { WARRIORS, UNIT_CLASS_INFO, POSITION_INFO, getCounterBonus } from '../data/warriors';
 import { RESOURCE_INFO } from '../data/trades';
-import type { BattleLogEntry, BattleLogType, PositionRow, Warrior, Enemy, BossSkillWarning, TieredReward, FailureCompensation } from '../types';
+import type { BattleLogEntry, BattleLogType, PositionRow, Warrior, Enemy, BossSkillWarning, TieredReward, FailureCompensation, BattleSummary } from '../types';
 
 const LOG_TYPE_STYLES: Record<BattleLogType, string> = {
   attack: 'log-attack',
@@ -286,7 +286,7 @@ const FailureCompensationDisplay = ({ compensation }: { compensation: FailureCom
   );
 };
 
-const BattleSummaryCard = ({ summary }: { summary: any }) => {
+const BattleSummaryCard = ({ summary }: { summary: BattleSummary | null }) => {
   if (!summary) return null;
   return (
     <div className="battle-summary">
@@ -357,7 +357,7 @@ export function BattlePanel() {
   const [showLog, setShowLog] = useState(false);
   const [logFilter, setLogFilter] = useState<BattleLogType | 'all'>('all');
   const [battleLog, setBattleLog] = useState<BattleLogEntry[]>([]);
-  const [battleSummary, setBattleSummary] = useState<any>(null);
+  const [battleSummary, setBattleSummary] = useState<BattleSummary | null>(null);
 
   const filteredLog = useMemo(() => {
     if (logFilter === 'all') return battleLog;
@@ -494,7 +494,7 @@ export function BattlePanel() {
               <select
                 className="log-filter"
                 value={logFilter}
-                onChange={(e) => setLogFilter(e.target.value as any)}
+                onChange={(e) => setLogFilter(e.target.value as BattleLogType | 'all')}
               >
                 <option value="all">全部日志</option>
                 <option value="attack">⚔️ 攻击</option>

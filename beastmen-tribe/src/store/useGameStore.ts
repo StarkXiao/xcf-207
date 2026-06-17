@@ -162,7 +162,6 @@ import type {
   BuildingUpgradeHint,
   ProductionEstimate,
   BossSkillWarning,
-  WallDurability,
   RewardTier,
   FailureCompensation,
 } from '../types';

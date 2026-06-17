@@ -63,7 +63,7 @@ export class VillageScene extends Phaser.Scene {
         const gy = Math.floor(pointer.y / gridSize) * gridSize + gridSize / 2;
 
         const state = useGameStore.getState();
-        const success = state.buildBuilding(this.placingBuilding as any, gx, gy);
+        const success = state.addToBuildQueue('build', this.placingBuilding as any, gx, gy);
         if (success) {
           this.cancelPlacing();
           this.renderBuildings();

@@ -44,7 +44,7 @@ import type {
   BattleSummary,
   PositionRow,
 } from '../types';
-import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity } from '../data/buildings';
+import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity, checkBuildingRequirements as checkBuildReqs, getBuildTime, getUpgradeTime, getProductionEstimate as getProdEstimate, getUpgradeHints as getUpgHints, getUnlockableBuildings as getUnlockableBldgs, getRequirementDescription } from '../data/buildings';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
@@ -156,6 +156,11 @@ import type {
   RiskEvent,
   NegotiationState,
   CaravanLogEntry,
+  BuildQueueItemType,
+  BuildQueueItem,
+  BuildingRequirement,
+  BuildingUpgradeHint,
+  ProductionEstimate,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -544,6 +549,8 @@ const createInitialState = (): GameState => {
     wantedLevel: 0,
     lastBlackMarketRefresh: 0,
     blackMarketRefreshInterval: 120,
+    buildQueue: [],
+    maxBuildQueueSize: 3,
   };
 };
 
@@ -745,6 +752,9 @@ const loadSave = (): GameState => {
           }
         : createInitialGovernmentState(state.day);
 
+      state.buildQueue = parsed.buildQueue || [];
+      state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
+
       return state;
     }
   } catch (e) {
@@ -897,6 +907,15 @@ interface GameStore extends GameState {
   unlockTradeRoute: (routeId: string) => boolean;
   getMaxCaravans: () => number;
   getCargoCapacity: () => number;
+
+  addToBuildQueue: (type: BuildQueueItemType, buildingType: BuildingType, x?: number, y?: number, buildingId?: string) => boolean;
+  cancelBuildQueueItem: (itemId: string) => boolean;
+  processBuildQueue: (delta: number) => void;
+  canBuild: (type: BuildingType) => { canBuild: boolean; reason?: string };
+  getProductionEstimate: (type: BuildingType, level: number) => ProductionEstimate;
+  getUpgradeHints: () => BuildingUpgradeHint[];
+  getUnlockableBuildings: () => BuildingType[];
+  checkBuildingRequirements: (type: BuildingType) => { met: boolean; missing: BuildingRequirement[] };
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -5061,6 +5080,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processBlackMarketTick(delta);
     state.processPriceFluctuationTick(delta);
     state.processStockRefreshTick(delta);
+    state.processBuildQueue(delta);
 
     const ending = state.checkForEnding();
     if (ending) {
@@ -5160,6 +5180,215 @@ export const useGameStore = create<GameStore>((set, get) => ({
       .filter((b) => b.type === 'caravanserai' && !b.isBuilding)
       .reduce((max, b) => Math.max(max, b.level), 0);
     return CARAVAN_CONFIG.baseCargoCapacity + caravanseraiLevel * CARAVAN_CONFIG.caravanseraiCapacityBonus;
+  },
+
+  checkBuildingRequirements: (type) => {
+    const state = get();
+    return checkBuildReqs(type, state.buildings, state.day, state.population);
+  },
+
+  canBuild: (type) => {
+    const state = get();
+    const config = BUILDINGS[type];
+    if (!config) return { canBuild: false, reason: '建筑不存在' };
+
+    const { met, missing } = checkBuildReqs(type, state.buildings, state.day, state.population);
+    if (!met) {
+      return { canBuild: false, reason: getRequirementDescription(missing[0]) };
+    }
+
+    if (state.buildQueue.length >= state.maxBuildQueueSize) {
+      return { canBuild: false, reason: '施工队列已满' };
+    }
+
+    const cost = getBuildingCost(type, 0);
+    const costBonus = calculateTechBonus(state.technologies, 'resource_cost');
+    const actualCost: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(cost)) {
+      actualCost[key as keyof Resources] = Math.floor((amount as number) * (1 + costBonus));
+    }
+
+    if (!state.canAfford(actualCost)) {
+      return { canBuild: false, reason: '资源不足' };
+    }
+
+    return { canBuild: true };
+  },
+
+  addToBuildQueue: (type, buildingType, x, y, buildingId) => {
+    const state = get();
+    const config = BUILDINGS[buildingType];
+    if (!config) return false;
+
+    if (state.buildQueue.length >= state.maxBuildQueueSize) return false;
+
+    let targetLevel = 1;
+    let totalTime = getBuildTime(buildingType);
+    let cost = getBuildingCost(buildingType, 0);
+
+    if (type === 'upgrade' && buildingId) {
+      const building = state.buildings.find((b) => b.id === buildingId);
+      if (!building || building.level >= config.maxLevel) return false;
+      targetLevel = building.level + 1;
+      totalTime = getUpgradeTime(buildingType, building.level);
+      cost = getBuildingCost(buildingType, building.level);
+    }
+
+    const costBonus = calculateTechBonus(state.technologies, 'resource_cost');
+    const actualCost: Partial<Resources> = {};
+    for (const [key, amount] of Object.entries(cost)) {
+      actualCost[key as keyof Resources] = Math.floor((amount as number) * (1 + costBonus));
+    }
+
+    if (!state.spendResources(actualCost)) return false;
+
+    const constructionSpeedBonus = state.getGovernmentBonus('construction_speed');
+    const adjustedTime = Math.max(1, Math.floor(totalTime * (1 - constructionSpeedBonus)));
+
+    const queueItem: BuildQueueItem = {
+      id: generateId(),
+      type,
+      buildingType,
+      buildingId,
+      targetLevel,
+      x,
+      y,
+      progress: 0,
+      totalTime: adjustedTime,
+      cost: actualCost,
+    };
+
+    set({ buildQueue: [...state.buildQueue, queueItem] });
+    return true;
+  },
+
+  cancelBuildQueueItem: (itemId) => {
+    const state = get();
+    const item = state.buildQueue.find((i) => i.id === itemId);
+    if (!item) return false;
+
+    const refund: Partial<Resources> = {};
+    const progressRatio = item.progress / item.totalTime;
+    const refundRatio = Math.max(0, 1 - progressRatio * 0.5);
+
+    for (const [key, amount] of Object.entries(item.cost)) {
+      refund[key as keyof Resources] = Math.floor((amount as number) * refundRatio * 0.5);
+    }
+
+    state.addResources(refund);
+
+    const newQueue = state.buildQueue.filter((i) => i.id !== itemId);
+    set({ buildQueue: newQueue });
+    return true;
+  },
+
+  processBuildQueue: (delta) => {
+    const state = get();
+    if (state.buildQueue.length === 0) return;
+
+    const newQueue = [...state.buildQueue];
+    const completedItems: BuildQueueItem[] = [];
+
+    const firstItem = newQueue[0];
+    const constructionSpeedBonus = state.getGovernmentBonus('construction_speed');
+    const actualDelta = delta * (1 + constructionSpeedBonus);
+
+    firstItem.progress += actualDelta;
+
+    if (firstItem.progress >= firstItem.totalTime) {
+      completedItems.push(firstItem);
+      newQueue.shift();
+    }
+
+    let newBuildings = [...state.buildings];
+    let newUnlocked = [...state.unlockedBuildings];
+
+    for (const item of completedItems) {
+      if (item.type === 'build' && item.x !== undefined && item.y !== undefined) {
+        const newBuilding: Building = {
+          id: generateId(),
+          type: item.buildingType,
+          level: 1,
+          x: item.x,
+          y: item.y,
+          isBuilding: false,
+          buildProgress: 100,
+          lastCollect: Date.now(),
+          storage: {},
+        };
+        newBuildings.push(newBuilding);
+
+        const { met } = checkBuildReqs(item.buildingType, newBuildings, state.day, state.population);
+        if (met && !newUnlocked.includes(item.buildingType)) {
+          newUnlocked.push(item.buildingType);
+        }
+
+        const unlockable = getUnlockableBldgs(newBuildings, state.day, state.population, newUnlocked);
+        for (const bType of unlockable) {
+          if (!newUnlocked.includes(bType)) {
+            newUnlocked.push(bType);
+          }
+        }
+
+        state.updateTaskProgress('build_buildings', 1, item.buildingType);
+      } else if (item.type === 'upgrade' && item.buildingId) {
+        newBuildings = newBuildings.map((b) => {
+          if (b.id !== item.buildingId) return b;
+          return { ...b, level: item.targetLevel, isBuilding: false, buildProgress: 100 };
+        });
+
+        const building = newBuildings.find((b) => b.id === item.buildingId);
+        if (building) {
+          if (building.type === 'townhall') {
+            const unlockable = getUnlockableBldgs(newBuildings, state.day, state.population, newUnlocked);
+            for (const bType of unlockable) {
+              if (!newUnlocked.includes(bType)) {
+                newUnlocked.push(bType);
+              }
+            }
+          }
+        }
+
+        state.updateTaskProgress('upgrade_buildings', 1);
+      }
+    }
+
+    if (completedItems.length > 0 || newQueue.length !== state.buildQueue.length) {
+      const newTotem = {
+        ...state.totem,
+        maxFaith: getMaxFaith(newBuildings),
+        accumulation: {
+          ...state.totem.accumulation,
+          perSecond: getFaithPerSecond(newBuildings, state.totem.unlockedTotems),
+        },
+      };
+
+      set({
+        buildQueue: newQueue,
+        buildings: newBuildings,
+        unlockedBuildings: newUnlocked,
+        maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
+        resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
+        resources: calculateTotalResources(newBuildings),
+        totem: newTotem,
+      });
+    } else if (newQueue[0]?.progress !== state.buildQueue[0]?.progress) {
+      set({ buildQueue: newQueue });
+    }
+  },
+
+  getProductionEstimate: (type, level) => {
+    return getProdEstimate(type, level);
+  },
+
+  getUpgradeHints: () => {
+    const state = get();
+    return getUpgHints(state.buildings, state.resources);
+  },
+
+  getUnlockableBuildings: () => {
+    const state = get();
+    return getUnlockableBldgs(state.buildings, state.day, state.population, state.unlockedBuildings);
   },
 
   startCaravan: (routeId, cargo, warriorIds) => {

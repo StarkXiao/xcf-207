@@ -25,6 +25,13 @@ export type BuildingType =
   | 'totem_pole'
   | 'shrine';
 
+export interface BuildingRequirement {
+  type: 'building' | 'tech' | 'day' | 'population';
+  id?: string;
+  level?: number;
+  amount?: number;
+}
+
 export interface BuildingConfig {
   id: BuildingType;
   name: string;
@@ -37,6 +44,41 @@ export interface BuildingConfig {
   maxLevel: number;
   upgradeMultiplier: number;
   requires?: BuildingType;
+  requirements?: BuildingRequirement[];
+  buildTime: number;
+  upgradeTime: number;
+}
+
+export type BuildQueueItemType = 'build' | 'upgrade';
+
+export interface BuildQueueItem {
+  id: string;
+  type: BuildQueueItemType;
+  buildingType: BuildingType;
+  buildingId?: string;
+  targetLevel: number;
+  x?: number;
+  y?: number;
+  progress: number;
+  totalTime: number;
+  cost: Partial<Resources>;
+}
+
+export interface BuildingUpgradeHint {
+  buildingId: string;
+  buildingType: BuildingType;
+  currentLevel: number;
+  nextLevel: number;
+  canAfford: boolean;
+  productionGain?: Partial<Resources>;
+  cost: Partial<Resources>;
+}
+
+export interface ProductionEstimate {
+  current: Partial<Resources>;
+  next: Partial<Resources>;
+  gain: Partial<Resources>;
+  gainPercent: Partial<Record<ResourceType, number>>;
 }
 
 export interface ResourceCapacity {
@@ -1252,4 +1294,6 @@ export interface GameState {
   wantedLevel: number;
   lastBlackMarketRefresh: number;
   blackMarketRefreshInterval: number;
+  buildQueue: BuildQueueItem[];
+  maxBuildQueueSize: number;
 }

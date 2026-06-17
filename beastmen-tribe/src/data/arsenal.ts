@@ -263,3 +263,62 @@ export const calculateIronTradePrice = (basePrice: number, supplyStatus: string,
   const { costMod } = getSupplyLineModifier(supplyStatus);
   return Math.ceil(basePrice * costMod * priceFluctuation);
 };
+
+export const IRON_TRADE_SUPPLY_BOOST_THRESHOLD = 100;
+export const IRON_CONSUMPTION_DISRUPT_THRESHOLD = 50;
+
+export const getSupplyLineStatusName = (status: string): string => {
+  switch (status) {
+    case 'disrupted':
+      return '补给中断';
+    case 'boosted':
+      return '补给充沛';
+    default:
+      return '正常供应';
+  }
+};
+
+export const getSupplyLineStatusIcon = (status: string): string => {
+  switch (status) {
+    case 'disrupted':
+      return '⛓️‍💥';
+    case 'boosted':
+      return '🚛';
+    default:
+      return '🔗';
+  }
+};
+
+export const tryBoostSupplyLine = (ironAmount: number, currentStatus: string): { shouldBoost: boolean; newStatus: string } => {
+  if (currentStatus === 'boosted') {
+    return { shouldBoost: false, newStatus: currentStatus };
+  }
+  
+  const boostChance = Math.min(0.3, ironAmount / IRON_TRADE_SUPPLY_BOOST_THRESHOLD * 0.2);
+  
+  if (Math.random() < boostChance) {
+    const newStatus = currentStatus === 'disrupted' ? 'normal' : 'boosted';
+    return { shouldBoost: true, newStatus };
+  }
+  
+  return { shouldBoost: false, newStatus: currentStatus };
+};
+
+export const tryDisruptSupplyLine = (ironConsumed: number, currentStatus: string): { shouldDisrupt: boolean; newStatus: string } => {
+  if (currentStatus === 'disrupted') {
+    return { shouldDisrupt: false, newStatus: currentStatus };
+  }
+  
+  const disruptChance = Math.min(0.25, ironConsumed / IRON_CONSUMPTION_DISRUPT_THRESHOLD * 0.15);
+  
+  if (Math.random() < disruptChance) {
+    const newStatus = currentStatus === 'boosted' ? 'normal' : 'disrupted';
+    return { shouldDisrupt: true, newStatus };
+  }
+  
+  return { shouldDisrupt: false, newStatus: currentStatus };
+};
+
+export const getIronPriceFluctuationImpact = (ironConsumed: number): number => {
+  return 1 + (ironConsumed / 200) * 0.1;
+};

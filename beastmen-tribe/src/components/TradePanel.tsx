@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { RESOURCE_INFO } from '../data/trades';
+import { getSupplyLineStatusName, getSupplyLineStatusIcon, getSupplyLineModifier } from '../data/arsenal';
 import type { Resources } from '../types';
 
 export function TradePanel() {
@@ -21,6 +22,7 @@ export function TradePanel() {
   const cancelNegotiation = useGameStore((s) => s.cancelNegotiation);
   const wantedLevel = useGameStore((s) => s.wantedLevel);
   const lastBlackMarketRefresh = useGameStore((s) => s.lastBlackMarketRefresh);
+  const arsenal = useGameStore((s) => s.arsenal);
 
   const hasMarket = buildings.some((b) => b.type === 'market' && !b.isBuilding);
   const hasSmugglersDen = buildings.some((b) => b.type === 'smugglers_den' && !b.isBuilding);
@@ -92,6 +94,32 @@ export function TradePanel() {
 
       {activeTab === 'normal' && (
         <>
+          <div className="supply-line-status">
+            <div className="supply-line-header">
+              <span className="supply-line-icon">{getSupplyLineStatusIcon(arsenal.supplyLineStatus)}</span>
+              <span className="supply-line-title">军备补给线</span>
+              <span className={`supply-line-status-badge ${arsenal.supplyLineStatus}`}>
+                {getSupplyLineStatusName(arsenal.supplyLineStatus)}
+              </span>
+            </div>
+            <div className="supply-line-effects">
+              <div className="supply-line-effect">
+                <span>铁矿买入价:</span>
+                <span className={arsenal.supplyLineStatus === 'disrupted' ? 'negative' : arsenal.supplyLineStatus === 'boosted' ? 'positive' : ''}>
+                  {getSupplyLineModifier(arsenal.supplyLineStatus).costMod > 1 ? '+' : ''}
+                  {Math.round((getSupplyLineModifier(arsenal.supplyLineStatus).costMod - 1) * 100)}%
+                </span>
+              </div>
+              <div className="supply-line-effect">
+                <span>铁矿卖出价:</span>
+                <span className={arsenal.supplyLineStatus === 'boosted' ? 'positive' : arsenal.supplyLineStatus === 'disrupted' ? 'negative' : ''}>
+                  {getSupplyLineModifier(arsenal.supplyLineStatus).costMod < 1 ? '' : '+'}
+                  {Math.round((1 / getSupplyLineModifier(arsenal.supplyLineStatus).costMod - 1) * 100)}%
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="price-overview">
             <h5 className="overview-title">📊 价格行情</h5>
             <div className="price-list">
@@ -194,6 +222,11 @@ export function TradePanel() {
                     {hasBonus && (
                       <span className={`trade-bonus ${trade.currentPriceMultiplier > 1 ? 'positive' : 'negative'}`}>
                         {trade.currentPriceMultiplier > 1 ? '+' : ''}{Math.round((trade.currentPriceMultiplier - 1) * 100)}%
+                      </span>
+                    )}
+                    {trade.affectedBySupplyLine && (
+                      <span className="supply-line-tag" title="受军备补给线影响">
+                        🔗
                       </span>
                     )}
                   </div>

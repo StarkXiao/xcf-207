@@ -27,12 +27,24 @@ const calculateDiplomaticTradeBonus = (factions: Record<FactionType, Faction>): 
   return Math.max(-0.3, Math.min(0.5, bonus));
 };
 
+const getSupplyLineIronModifier = (supplyLineStatus: string, isBuyingIron: boolean): number => {
+  switch (supplyLineStatus) {
+    case 'disrupted':
+      return isBuyingIron ? 1.5 : 0.7;
+    case 'boosted':
+      return isBuyingIron ? 0.8 : 1.3;
+    default:
+      return 1;
+  }
+};
+
 export const generateTrades = (
   count: number = 6,
   tradeModifier: number = 0,
   factions?: Record<FactionType, Faction>,
   priceFluctuations?: Record<ResourceType, PriceFluctuation>,
-  day?: number
+  day?: number,
+  supplyLineStatus: string = 'normal'
 ): TradeOffer[] => {
   const trades: TradeOffer[] = [];
   const diplomaticBonus = factions ? calculateDiplomaticTradeBonus(factions) : 0;
@@ -56,7 +68,16 @@ export const generateTrades = (
       priceMultiplier = isBuy ? (receiveFluct / giveFluct) : (giveFluct / receiveFluct);
     }
     
-    const ratio = Math.max(0.3, Math.min(1.5, baseRatio * ratioMod * priceMultiplier));
+    let ratio = Math.max(0.3, Math.min(1.5, baseRatio * ratioMod * priceMultiplier));
+    
+    const ironResource = isBuy ? giveResource : receiveResource;
+    const isIronTrade = ironResource === 'iron';
+    if (isIronTrade) {
+      const isBuyingIron = isBuy;
+      const supplyMod = getSupplyLineIronModifier(supplyLineStatus, isBuyingIron);
+      ratio = Math.max(0.3, Math.min(2.0, ratio * supplyMod));
+    }
+    
     const basePrice = BASE_PRICES[giveResource] * baseAmount;
 
     trades.push({
@@ -74,6 +95,7 @@ export const generateTrades = (
       basePrice,
       currentPriceMultiplier: ratio,
       expiresAt: day ? Date.now() + 180000 : undefined,
+      affectedBySupplyLine: isIronTrade,
     });
   }
 
@@ -102,19 +124,28 @@ export const generateTrades = (
         priceMultiplier = otherFluct / specialityFluct;
       }
       
+      let finalMultiplier = factionBonus * priceMultiplier;
+      const isIronTrade = specialityResource === 'iron' || otherResource === 'iron';
+      if (isIronTrade) {
+        const isBuyingIron = specialityResource === 'iron';
+        const supplyMod = getSupplyLineIronModifier(supplyLineStatus, isBuyingIron);
+        finalMultiplier = Math.max(0.3, Math.min(2.0, finalMultiplier * supplyMod));
+      }
+      
       const basePrice = BASE_PRICES[otherResource] * baseAmount;
 
       trades.push({
         id: `trade-${faction.id}-${factionTradeIndex}`,
         type: 'sell',
-        give: { resource: otherResource, amount: Math.floor(baseAmount * factionBonus * priceMultiplier) },
+        give: { resource: otherResource, amount: Math.floor(baseAmount * finalMultiplier) },
         receive: { resource: specialityResource, amount: baseAmount },
         stock: faction.stance === 'ally' ? 5 : 3,
         basePrice,
-        currentPriceMultiplier: factionBonus * priceMultiplier,
+        currentPriceMultiplier: finalMultiplier,
         factionId: faction.id,
         minReputation: faction.stance === 'ally' ? 60 : 30,
         expiresAt: day ? Date.now() + 240000 : undefined,
+        affectedBySupplyLine: isIronTrade,
       });
       factionTradeIndex++;
     }

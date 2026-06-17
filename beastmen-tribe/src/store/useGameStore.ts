@@ -192,6 +192,10 @@ import {
   getSupplyLineModifier,
   canEquipWeapon,
   REPAIR_EFFICIENCY_THRESHOLD,
+  tryBoostSupplyLine,
+  tryDisruptSupplyLine,
+  getIronPriceFluctuationImpact,
+  getSupplyLineStatusName,
 } from '../data/arsenal';
 import type {
   ResourceType,
@@ -630,7 +634,7 @@ const createInitialState = (): GameState => {
     warriors: [],
     trainingQueue: [],
     invasion: null,
-    trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1),
+    trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1, 'normal'),
     unlockedBuildings: getUnlockedBuildingsByMilestones(initialThLevel),
     unlockedWarriors: getUnlockedWarriorsByMilestones(initialThLevel),
     selectedBuildingId: null,
@@ -1009,10 +1013,11 @@ const calculateOfflineEarningsInternal = (
 };
 
 const hydrateGameState = (parsed: GameState): GameState => {
+  const supplyLineStatus = parsed.arsenal?.supplyLineStatus || 'normal';
   const state: GameState = {
     ...createInitialState(),
     ...parsed,
-    trades: generateTrades(6, 0, parsed.factions),
+    trades: generateTrades(6, 0, parsed.factions, parsed.priceFluctuations, Math.floor(parsed.day || 1), supplyLineStatus),
     selectedBuildingId: null,
     activeEvents: parsed.activeEvents || [],
     population: parsed.population ?? 8,
@@ -2766,18 +2771,50 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.addSupplyLog('battle', `战斗中武器耐久度损失总计 ${totalDurabilityLoss}`, 0);
     }
 
+    let totalIronConsumed = state.getDeploymentCost();
+    
     if (state.arsenal.autoRepair && victory) {
       const repairCost = calculateTotalRepairCost(warriorsWithDurability);
       const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
       const totalRepairCost = Math.ceil(repairCost * costMod);
       if (totalRepairCost > 0 && state.canAfford({ iron: totalRepairCost })) {
         state.spendResources({ iron: totalRepairCost });
+        totalIronConsumed += totalRepairCost;
         warriorsWithDurability.forEach(w => {
           if (w.weapon) {
             w.weapon.durability = w.weapon.maxDurability;
           }
         });
         state.addSupplyLog('repair', `战后自动修复所有武器，消耗铁矿 ${totalRepairCost}`, totalRepairCost);
+      }
+    }
+
+    if (totalIronConsumed > 0) {
+      const disruptResult = tryDisruptSupplyLine(totalIronConsumed, state.arsenal.supplyLineStatus);
+      if (disruptResult.shouldDisrupt) {
+        set({
+          arsenal: {
+            ...state.arsenal,
+            supplyLineStatus: disruptResult.newStatus as any,
+          }
+        });
+        state.addSupplyLog('supply', `大量军备消耗导致补给线状态变更：${getSupplyLineStatusName(disruptResult.newStatus)}`, 0);
+      }
+      
+      const priceImpact = getIronPriceFluctuationImpact(totalIronConsumed);
+      if (priceImpact > 1 && state.priceFluctuations.iron) {
+        const ironFluct = state.priceFluctuations.iron;
+        const newMultiplier = Math.min(2.0, ironFluct.currentMultiplier * priceImpact);
+        set({
+          priceFluctuations: {
+            ...state.priceFluctuations,
+            iron: {
+              ...ironFluct,
+              currentMultiplier: newMultiplier,
+              trend: newMultiplier > ironFluct.currentMultiplier ? 'rising' : (newMultiplier < ironFluct.currentMultiplier ? 'falling' : 'stable'),
+            }
+          }
+        });
       }
     }
 
@@ -2833,6 +2870,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.spendResources({ [trade.give.resource]: giveAmount });
     state.addResources({ [trade.receive.resource]: trade.receive.amount });
 
+    const isBuyingIron = trade.receive.resource === 'iron';
+    const isSellingIron = trade.give.resource === 'iron';
+    const ironAmount = isBuyingIron ? trade.receive.amount : (isSellingIron ? giveAmount : 0);
+    
+    if (isBuyingIron && ironAmount > 0) {
+      const boostResult = tryBoostSupplyLine(ironAmount, state.arsenal.supplyLineStatus);
+      if (boostResult.shouldBoost) {
+        set({
+          arsenal: {
+            ...state.arsenal,
+            supplyLineStatus: boostResult.newStatus as any,
+          }
+        });
+        state.addSupplyLog('supply', `铁矿交易改善了补给线状态：${getSupplyLineStatusName(boostResult.newStatus)}`, 0);
+      }
+    }
+
     set({
       trades: state.trades.map((t) =>
         t.id === tradeId ? { ...t, stock: t.stock - 1 } : t
@@ -2860,7 +2914,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.spendResources({ gold: 20 });
     const weatherEffects = state.getWeatherEffects();
     set({ 
-      trades: generateTrades(6, weatherEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day)),
+      trades: generateTrades(6, weatherEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
       lastStockRefresh: Date.now(),
     });
   },
@@ -3927,7 +3981,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       weather: newWeather,
       weatherDuration: getWeatherDuration(newWeather),
-      trades: generateTrades(6, newEffects.tradeModifier, state.factions),
+      trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
     });
   },
 
@@ -4121,7 +4175,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const setPayload: any = { factions: newFactions };
 
     if (shouldRefreshTrades) {
-      setPayload.trades = generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions);
+      setPayload.trades = generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus);
     }
 
     if (shouldRefreshInvasion) {
@@ -4228,7 +4282,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (reputationChanged) {
       const currentState = get();
-      setPayload.trades = generateTrades(6, currentState.getWeatherEffects().tradeModifier, newFactions);
+      setPayload.trades = generateTrades(6, currentState.getWeatherEffects().tradeModifier, newFactions, currentState.priceFluctuations, Math.floor(currentState.day), currentState.arsenal.supplyLineStatus);
       if (!currentState.invasion?.isActive) {
         const wave = Math.floor(currentState.day / 2) + 1;
         setPayload.invasion = generateInvasion(wave, newFactions);
@@ -5245,7 +5299,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: 0,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
       });
       seasonChanged = true;
       weatherChanged = true;
@@ -5256,7 +5310,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: newSeasonProgress,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
       });
       weatherChanged = true;
     } else {

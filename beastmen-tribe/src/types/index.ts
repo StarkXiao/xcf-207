@@ -437,6 +437,7 @@ export interface TradeOffer {
   factionId?: FactionType;
   expiresAt?: number;
   minReputation?: number;
+  affectedBySupplyLine?: boolean;
 }
 
 export type RiskEventType = 'bandit_attack' | 'storm' | 'landslide' | 'beast_attack' | 'customs_check' | 'plague' | 'betrayal';

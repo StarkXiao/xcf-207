@@ -1,0 +1,74 @@
+import { useEffect, useRef, useState } from 'react';
+import { createGame } from './game/config';
+import { ResourceBar } from './components/ResourceBar';
+import { BuildingPanel } from './components/BuildingPanel';
+import { WarriorPanel } from './components/WarriorPanel';
+import { BattlePanel } from './components/BattlePanel';
+import { TradePanel } from './components/TradePanel';
+import { SavePanel } from './components/SavePanel';
+import './App.css';
+
+type TabType = 'building' | 'warrior' | 'battle' | 'trade' | 'save';
+
+const TABS: { id: TabType; label: string; icon: string }[] = [
+  { id: 'building', label: '建设', icon: '🏗️' },
+  { id: 'warrior', label: '训练', icon: '⚔️' },
+  { id: 'battle', label: '战斗', icon: '🛡️' },
+  { id: 'trade', label: '交易', icon: '🏪' },
+  { id: 'save', label: '设置', icon: '💾' },
+];
+
+function App() {
+  const gameContainerRef = useRef<HTMLDivElement>(null);
+  const gameRef = useRef<any>(null);
+  const [activeTab, setActiveTab] = useState<TabType>('building');
+
+  useEffect(() => {
+    if (gameContainerRef.current && !gameRef.current) {
+      gameRef.current = createGame(gameContainerRef.current);
+    }
+    return () => {
+      if (gameRef.current) {
+        gameRef.current.destroy(true);
+        gameRef.current = null;
+      }
+    };
+  }, []);
+
+  return (
+    <div className="app">
+      <ResourceBar />
+
+      <div className="main-content">
+        <div className="game-area">
+          <div ref={gameContainerRef} className="game-container" />
+        </div>
+
+        <div className="side-panel">
+          <div className="tabs">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                className={`tab ${activeTab === tab.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span className="tab-icon">{tab.icon}</span>
+                <span className="tab-label">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="panel-content">
+            {activeTab === 'building' && <BuildingPanel gameRef={gameRef} />}
+            {activeTab === 'warrior' && <WarriorPanel />}
+            {activeTab === 'battle' && <BattlePanel />}
+            {activeTab === 'trade' && <TradePanel />}
+            {activeTab === 'save' && <SavePanel />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;

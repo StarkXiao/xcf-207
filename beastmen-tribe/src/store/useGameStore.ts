@@ -337,6 +337,10 @@ const calculateArmyFoodConsumption = (warriors: Warrior[]): number => {
   return warriors.reduce((sum, w) => sum + (WARRIORS[w.type]?.foodConsumption || 1), 0);
 };
 
+const calculateTrainingFoodConsumption = (trainingQueue: TrainingQueue[]): number => {
+  return calculateTrainingPopulation(trainingQueue);
+};
+
 const getBarracksPopulationEfficiency = (buildings: Building[]): number => {
   const barracks = buildings.filter((b) => b.type === 'barracks' && !b.isBuilding);
   if (barracks.length === 0) return 1;
@@ -2069,13 +2073,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const foodConsumptionTechBonus = calculateTechBonus(state.technologies, 'food_consumption');
     const foodConsumptionTotemBonus = state.getTotemBonus('food_consumption');
     const loyaltyDecayBonus = calculateTechBonus(state.technologies, 'loyalty_decay');
+    const militaryPop = calculateMilitaryPopulation(state.warriors);
+    const trainingPop = calculateTrainingPopulation(state.trainingQueue);
+    const civilianPop = Math.max(0, state.population - militaryPop - trainingPop);
     const armyFoodConsumption = calculateArmyFoodConsumption(state.warriors);
+    const trainingFoodConsumption = calculateTrainingFoodConsumption(state.trainingQueue);
     const adjustedConsumptionRate = state.foodConsumptionRate * (1 + foodConsumptionTechBonus + foodConsumptionTotemBonus);
     const adjustedLoyaltyDecay = LOYALTY_DECAY_NO_FOOD * (1 + loyaltyDecayBonus);
 
-    const civilianFood = state.population * adjustedConsumptionRate;
+    const civilianFood = civilianPop * adjustedConsumptionRate;
+    const trainingFood = trainingFoodConsumption * adjustedConsumptionRate;
     const militaryFood = armyFoodConsumption * adjustedConsumptionRate;
-    const foodConsumed = (civilianFood + militaryFood) * delta;
+    const foodConsumed = (civilianFood + trainingFood + militaryFood) * delta;
     let newFood = state.resources.food - foodConsumed;
     let newLoyalty = state.loyalty;
     let newPopulation = state.population;

@@ -70,9 +70,11 @@ export function PopulationPanel() {
     .reduce((sum, b) => sum + b.level, 0);
 
   const armyFoodMultiplier = getArmyFoodConsumption();
+  const trainingFoodMultiplier = trainingPop;
   const civilianFoodPerSecond = civilianPop * foodConsumptionRate;
+  const trainingFoodPerSecond = trainingFoodMultiplier * foodConsumptionRate;
   const militaryFoodPerSecond = armyFoodMultiplier * foodConsumptionRate;
-  const totalFoodPerSecond = civilianFoodPerSecond + militaryFoodPerSecond;
+  const totalFoodPerSecond = civilianFoodPerSecond + trainingFoodPerSecond + militaryFoodPerSecond;
   const foodProduction = buildings
     .filter((b) => !b.isBuilding && b.type === 'farm')
     .reduce((sum, b) => sum + 2 * b.level, 0);
@@ -140,6 +142,12 @@ export function PopulationPanel() {
           <span className="detail-label">🍖 平民食物消耗</span>
           <span className="detail-value">{civilianFoodPerSecond.toFixed(1)}/秒</span>
         </div>
+        {trainingPop > 0 && (
+          <div className="pop-detail-item">
+            <span className="detail-label">🔨 训练中食物消耗</span>
+            <span className="detail-value" style={{ color: '#2196f3' }}>{trainingFoodPerSecond.toFixed(1)}/秒</span>
+          </div>
+        )}
         <div className="pop-detail-item">
           <span className="detail-label">⚔️ 军队食物消耗</span>
           <span className="detail-value" style={{ color: '#ff9800' }}>{militaryFoodPerSecond.toFixed(1)}/秒</span>
@@ -267,7 +275,7 @@ export function PopulationPanel() {
       <div className="pop-tips">
         <div className="tips-title">📖 人口与忠诚机制</div>
         <ul className="tips-list">
-          <li>每位族人每秒消耗 {foodConsumptionRate} 食物，军队有额外食物倍率</li>
+          <li>平民和训练中人口每秒消耗 {foodConsumptionRate} 食物/人，现役战士按兵种倍率消耗</li>
           <li>训练战士会占用人口，退役可释放人口并返还50%食物</li>
           <li>升级兵营可降低训练人口占用（最低70%）</li>
           <li>食物不足时忠诚度持续下降</li>

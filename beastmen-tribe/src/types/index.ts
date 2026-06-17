@@ -374,46 +374,6 @@ export interface TaskChain {
   failed: boolean;
 }
 
-export interface GameState {
-  tribeName: string;
-  day: number;
-  resources: Resources;
-  buildings: Building[];
-  warriors: Warrior[];
-  trainingQueue: TrainingQueue[];
-  invasion: Invasion | null;
-  trades: TradeOffer[];
-  unlockedBuildings: BuildingType[];
-  unlockedWarriors: WarriorType[];
-  selectedBuildingId: string | null;
-  lastSave: number;
-  totalWins: number;
-  totalLosses: number;
-  population: number;
-  maxPopulation: number;
-  loyalty: number;
-  foodConsumptionRate: number;
-  activeEvents: ActiveTribeEvent[];
-  eventCooldown: number;
-  recruitEfficiency: number;
-  activeExpedition: Expedition | null;
-  expeditionNotifications: ExpeditionNotification[];
-  totalExpeditions: number;
-  expeditionWins: number;
-  technologies: Tech[];
-  activeResearch: Tech | null;
-  unlockedTechnologies: string[];
-  taskChains: TaskChain[];
-  lastTaskRefreshDay: number;
-  taskRefreshInterval: number;
-  totalChainsCompleted: number;
-  totalChainsFailed: number;
-  season: SeasonType;
-  weather: WeatherType;
-  seasonProgress: number;
-  weatherDuration: number;
-}
-
 export type SeasonType = 'spring' | 'summer' | 'autumn' | 'winter';
 
 export type WeatherType = 'sunny' | 'rainy' | 'stormy' | 'snowy' | 'foggy' | 'drought';
@@ -454,4 +414,198 @@ export interface WeatherEffects {
   trainingSpeedModifier: number;
   invasionModifier: number;
   tradeModifier: number;
+}
+
+export type FactionType = 'ironclaw' | 'shadowfang' | 'sunhorn' | 'moonscar' | 'bloodtooth';
+
+export type FactionStance = 'enemy' | 'neutral' | 'friendly' | 'ally';
+
+export interface FactionConfig {
+  id: FactionType;
+  name: string;
+  icon: string;
+  description: string;
+  color: string;
+  baseReputation: number;
+  tradeBonus: number;
+  militaryStrength: number;
+  speciality: ResourceType | 'warriors' | 'knowledge';
+}
+
+export interface Faction {
+  id: FactionType;
+  reputation: number;
+  stance: FactionStance;
+  tradeUnlocked: boolean;
+  militaryAid: number;
+  lastInteraction: number;
+}
+
+export type DiplomaticActionType =
+  | 'gift'
+  | 'trade_treaty'
+  | 'military_aid_request'
+  | 'alliance_proposal'
+  | 'threaten'
+  | 'espionage'
+  | 'denounce';
+
+export interface DiplomaticAction {
+  id: string;
+  type: DiplomaticActionType;
+  factionId: FactionType;
+  name: string;
+  icon: string;
+  description: string;
+  cost: Partial<Resources>;
+  minReputation?: number;
+  maxReputation?: number;
+  cooldown: number;
+  reputationChange: { success: number; fail: number };
+  successRate: number;
+}
+
+export interface AllyReinforcement {
+  id: string;
+  factionId: FactionType;
+  factionName: string;
+  factionIcon: string;
+  warriors: { type: WarriorType; count: number; attack: number; defense: number; hp: number }[];
+  duration: number;
+  summonedAt: number;
+}
+
+export type DiplomaticEventType =
+  | 'faction_trade_request'
+  | 'border_conflict'
+  | 'royal_marriage'
+  | 'refugee_crisis'
+  | 'alliance_call'
+  | 'espionage_detected'
+  | 'great_festival'
+  | 'plague_spread';
+
+export interface DiplomaticEventChoice {
+  id: string;
+  text: string;
+  effects: {
+    reputationChanges?: Partial<Record<FactionType, number>>;
+    resourceChanges?: Partial<Resources>;
+    populationChange?: number;
+    loyaltyChange?: number;
+    unlockFaction?: FactionType;
+    triggerEnding?: EndingType;
+  };
+}
+
+export interface DiplomaticEventConfig {
+  id: string;
+  type: DiplomaticEventType;
+  name: string;
+  icon: string;
+  description: string;
+  factionId?: FactionType;
+  minDay: number;
+  minReputation?: Partial<Record<FactionType, number>>;
+  maxReputation?: Partial<Record<FactionType, number>>;
+  weight: number;
+  choices: DiplomaticEventChoice[];
+}
+
+export interface ActiveDiplomaticEvent {
+  id: string;
+  eventId: string;
+  type: DiplomaticEventType;
+  name: string;
+  icon: string;
+  description: string;
+  factionId?: FactionType;
+  choices: DiplomaticEventChoice[];
+  triggeredAt: number;
+}
+
+export type EndingType =
+  | 'conqueror'
+  | 'diplomat'
+  | 'trader'
+  | 'hermit'
+  | 'destroyed'
+  | 'legendary';
+
+export interface EndingConfig {
+  id: EndingType;
+  name: string;
+  icon: string;
+  description: string;
+  epilogue: string;
+  conditions: {
+    minTotalReputation?: number;
+    maxEnemyFactions?: number;
+    minAllyFactions?: number;
+    minDay?: number;
+    minTotalWins?: number;
+    minWealth?: number;
+    populationDestroyed?: boolean;
+    allFactionsAllied?: boolean;
+  };
+}
+
+export interface GameEnding {
+  ending: EndingType;
+  triggeredAt: number;
+  stats: {
+    finalDay: number;
+    totalWins: number;
+    totalLosses: number;
+    finalPopulation: number;
+    totalTrades: number;
+    totalExpeditions: number;
+    factionRelations: Record<FactionType, number>;
+  };
+}
+
+export interface GameState {
+  tribeName: string;
+  day: number;
+  resources: Resources;
+  buildings: Building[];
+  warriors: Warrior[];
+  trainingQueue: TrainingQueue[];
+  invasion: Invasion | null;
+  trades: TradeOffer[];
+  unlockedBuildings: BuildingType[];
+  unlockedWarriors: WarriorType[];
+  selectedBuildingId: string | null;
+  lastSave: number;
+  totalWins: number;
+  totalLosses: number;
+  population: number;
+  maxPopulation: number;
+  loyalty: number;
+  foodConsumptionRate: number;
+  activeEvents: ActiveTribeEvent[];
+  eventCooldown: number;
+  recruitEfficiency: number;
+  activeExpedition: Expedition | null;
+  expeditionNotifications: ExpeditionNotification[];
+  totalExpeditions: number;
+  expeditionWins: number;
+  technologies: Tech[];
+  activeResearch: Tech | null;
+  unlockedTechnologies: string[];
+  taskChains: TaskChain[];
+  lastTaskRefreshDay: number;
+  taskRefreshInterval: number;
+  totalChainsCompleted: number;
+  totalChainsFailed: number;
+  season: SeasonType;
+  weather: WeatherType;
+  seasonProgress: number;
+  weatherDuration: number;
+  factions: Record<FactionType, Faction>;
+  activeDiplomaticEvents: ActiveDiplomaticEvent[];
+  diplomaticEventCooldown: number;
+  allyReinforcements: AllyReinforcement[];
+  totalTrades: number;
+  gameEnding: GameEnding | null;
 }

@@ -1,4 +1,5 @@
-import type { TradeOffer, ResourceType } from '../types';
+import type { TradeOffer, ResourceType, Faction, FactionType } from '../types';
+import { FACTIONS } from './factions';
 
 export const RESOURCE_INFO: Record<ResourceType, { name: string; icon: string; color: string }> = {
   food: { name: '食物', icon: '🍖', color: '#ef4444' },
@@ -10,10 +11,30 @@ export const RESOURCE_INFO: Record<ResourceType, { name: string; icon: string; c
 
 const RESOURCE_POOL: ResourceType[] = ['food', 'wood', 'stone', 'gold', 'iron'];
 
-export const generateTrades = (count: number = 6, tradeModifier: number = 0): TradeOffer[] => {
+const calculateDiplomaticTradeBonus = (factions: Record<FactionType, Faction>): number => {
+  let bonus = 0;
+  for (const faction of Object.values(factions)) {
+    const config = FACTIONS[faction.id];
+    if (faction.stance === 'ally') {
+      bonus += config.tradeBonus;
+    } else if (faction.stance === 'friendly') {
+      bonus += config.tradeBonus * 0.5;
+    } else if (faction.stance === 'enemy') {
+      bonus -= Math.abs(config.tradeBonus) * 0.5;
+    }
+  }
+  return Math.max(-0.3, Math.min(0.5, bonus));
+};
+
+export const generateTrades = (
+  count: number = 6,
+  tradeModifier: number = 0,
+  factions?: Record<FactionType, Faction>
+): TradeOffer[] => {
   const trades: TradeOffer[] = [];
-  const ratioMod = 1 + tradeModifier;
-  
+  const diplomaticBonus = factions ? calculateDiplomaticTradeBonus(factions) : 0;
+  const ratioMod = 1 + tradeModifier + diplomaticBonus;
+
   for (let i = 0; i < count; i++) {
     const giveResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
     let receiveResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
@@ -40,5 +61,46 @@ export const generateTrades = (count: number = 6, tradeModifier: number = 0): Tr
       stock: Math.floor(Math.random() * 5) + 1,
     });
   }
+
+  if (factions) {
+    let factionTradeIndex = 0;
+    for (const faction of Object.values(factions)) {
+      if (faction.stance !== 'friendly' && faction.stance !== 'ally') continue;
+      if (trades.length >= count + 3) break;
+
+      const config = FACTIONS[faction.id];
+      if (config.speciality === 'warriors' || config.speciality === 'knowledge') continue;
+
+      const specialityResource = config.speciality as ResourceType;
+      let otherResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
+      while (otherResource === specialityResource) {
+        otherResource = RESOURCE_POOL[Math.floor(Math.random() * RESOURCE_POOL.length)];
+      }
+
+      const factionBonus = faction.stance === 'ally' ? 0.85 : 0.92;
+      const baseAmount = Math.floor((Math.random() * 60 + 40) * (faction.stance === 'ally' ? 1.3 : 1));
+
+      trades.push({
+        id: `trade-${faction.id}-${factionTradeIndex}`,
+        type: 'sell',
+        give: { resource: otherResource, amount: Math.floor(baseAmount * factionBonus) },
+        receive: { resource: specialityResource, amount: baseAmount },
+        stock: faction.stance === 'ally' ? 5 : 3,
+      });
+      factionTradeIndex++;
+    }
+  }
+
   return trades;
+};
+
+export const getTradeDiplomacyInfo = (factions: Record<FactionType, Faction>) => {
+  const bonus = calculateDiplomaticTradeBonus(factions);
+  return {
+    bonus,
+    bonusPercent: Math.round(bonus * 100),
+    friendlyTraders: Object.values(factions).filter(
+      (f) => f.stance === 'friendly' || f.stance === 'ally'
+    ).length,
+  };
 };

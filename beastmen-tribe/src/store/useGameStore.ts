@@ -24,6 +24,13 @@ import type {
   SeasonType,
   WeatherType,
   WeatherEffects,
+  FactionType,
+  Faction,
+  DiplomaticAction,
+  ActiveDiplomaticEvent,
+  AllyReinforcement,
+  EndingType,
+  GameEnding,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -45,6 +52,17 @@ import {
   getWeatherDuration,
   calculateCombinedEffects,
 } from '../data/weather';
+import {
+  FACTIONS,
+  createInitialFactions,
+  getStanceFromReputation,
+  getDiplomaticActions,
+} from '../data/factions';
+import {
+  triggerRandomDiplomaticEvent,
+  getDiplomaticEventInterval,
+} from '../data/diplomaticEvents';
+import { checkEndingConditions } from '../data/endings';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
@@ -244,6 +262,12 @@ const createInitialState = (): GameState => ({
   weather: 'sunny',
   seasonProgress: 0,
   weatherDuration: getWeatherDuration('sunny'),
+  factions: createInitialFactions(),
+  activeDiplomaticEvents: [],
+  diplomaticEventCooldown: getDiplomaticEventInterval(),
+  allyReinforcements: [],
+  totalTrades: 0,
+  gameEnding: null,
 });
 
 const loadSave = (): GameState => {
@@ -254,7 +278,7 @@ const loadSave = (): GameState => {
       const state: GameState = {
         ...createInitialState(),
         ...parsed,
-        trades: generateTrades(6),
+        trades: generateTrades(6, 0, parsed.factions),
         selectedBuildingId: null,
         activeEvents: parsed.activeEvents || [],
         population: parsed.population ?? 8,
@@ -263,6 +287,12 @@ const loadSave = (): GameState => {
         foodConsumptionRate: parsed.foodConsumptionRate ?? FOOD_PER_POP,
         eventCooldown: parsed.eventCooldown ?? EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
         recruitEfficiency: parsed.recruitEfficiency ?? 0.5 + ((parsed.loyalty ?? 70) / 100) * 0.5,
+        factions: parsed.factions || createInitialFactions(),
+        activeDiplomaticEvents: parsed.activeDiplomaticEvents || [],
+        diplomaticEventCooldown: parsed.diplomaticEventCooldown ?? getDiplomaticEventInterval(),
+        allyReinforcements: parsed.allyReinforcements || [],
+        totalTrades: parsed.totalTrades || 0,
+        gameEnding: parsed.gameEnding || null,
       };
       state.maxPopulation = calculateMaxPopulation(state.buildings, state.technologies);
       state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
@@ -344,6 +374,18 @@ interface GameStore extends GameState {
   getWeatherEffects: () => WeatherEffects;
   advanceSeason: () => void;
   changeWeather: () => void;
+
+  changeFactionReputation: (factionId: FactionType, amount: number) => void;
+  executeDiplomaticAction: (actionId: string) => { success: boolean; message: string };
+  getAvailableDiplomaticActions: (factionId: FactionType) => DiplomaticAction[];
+  resolveDiplomaticEvent: (eventId: string, choiceId: string) => void;
+  processDiplomaticTick: (delta: number) => void;
+  dismissDiplomaticEvent: (eventId: string) => void;
+  requestMilitaryAid: (factionId: FactionType) => boolean;
+  processAllyReinforcementsTick: (delta: number) => void;
+
+  checkForEnding: () => EndingType | null;
+  triggerEnding: (endingType: EndingType) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -600,7 +642,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.invasion?.isActive) return;
 
     const wave = Math.floor(state.day / 2) + 1;
-    const invader = generateInvasion(wave);
+    const invader = generateInvasion(wave, state.factions);
     const weatherEffects = state.getWeatherEffects();
     const invasionMod = Math.max(-0.5, weatherEffects.invasionModifier);
     const statMultiplier = 1 + invasionMod;
@@ -644,6 +686,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
+
+    for (const reinforcement of state.allyReinforcements) {
+      for (const unit of reinforcement.warriors) {
+        for (let i = 0; i < unit.count; i++) {
+          myWarriors.push({
+            id: generateId(),
+            type: unit.type,
+            hp: unit.hp,
+            maxHp: unit.hp,
+            attack: unit.attack,
+            defense: unit.defense,
+            level: 1,
+            exp: 0,
+          });
+        }
+      }
+      log.push(`🤝 ${reinforcement.factionIcon} ${reinforcement.factionName}的援军加入战斗！`);
+    }
 
     const wallDefense = calculateWallDefense(state.buildings, state.technologies);
     const loyaltyBonus = Math.floor(state.loyalty / 20);
@@ -742,7 +802,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       trades: state.trades.map((t) =>
         t.id === tradeId ? { ...t, stock: t.stock - 1 } : t
       ),
+      totalTrades: state.totalTrades + 1,
     });
+
+    for (const faction of Object.values(state.factions)) {
+      if (faction.stance === 'friendly' || faction.stance === 'ally') {
+        if (Math.random() < 0.2) {
+          state.changeFactionReputation(faction.id, 1);
+        }
+      }
+    }
 
     state.updateTaskProgress('trade_count', 1);
 
@@ -754,7 +823,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.resources.gold < 20) return;
     state.spendResources({ gold: 20 });
     const weatherEffects = state.getWeatherEffects();
-    set({ trades: generateTrades(6, weatherEffects.tradeModifier) });
+    set({ trades: generateTrades(6, weatherEffects.tradeModifier, state.factions) });
   },
 
   applyEventEffects: (effects) => {
@@ -1787,8 +1856,354 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       weather: newWeather,
       weatherDuration: getWeatherDuration(newWeather),
-      trades: generateTrades(6, newEffects.tradeModifier),
+      trades: generateTrades(6, newEffects.tradeModifier, state.factions),
     });
+  },
+
+  changeFactionReputation: (factionId, amount) => {
+    const state = get();
+    const faction = state.factions[factionId];
+    if (!faction) return;
+
+    const newReputation = Math.max(-100, Math.min(100, faction.reputation + amount));
+    const newStance = getStanceFromReputation(newReputation);
+
+    const newFactions: Record<string, Faction> = { ...state.factions };
+    newFactions[factionId] = {
+      ...faction,
+      reputation: newReputation,
+      stance: newStance,
+      tradeUnlocked: newReputation >= 0,
+      lastInteraction: Date.now(),
+    };
+
+    if (amount < 0) {
+      const allies = Object.values(newFactions).filter((f) => f.stance === 'ally' && f.id !== factionId);
+      for (const ally of allies) {
+        if (Math.random() < 0.3) {
+          newFactions[ally.id] = {
+            ...newFactions[ally.id],
+            reputation: Math.max(-100, newFactions[ally.id].reputation - Math.ceil(Math.abs(amount) * 0.3)),
+            stance: getStanceFromReputation(newFactions[ally.id].reputation),
+          };
+        }
+      }
+    }
+
+    set({ factions: newFactions as Record<FactionType, Faction> });
+  },
+
+  executeDiplomaticAction: (actionId) => {
+    const state = get();
+    let targetFaction: FactionType | null = null;
+    let matchedAction: DiplomaticAction | null = null;
+
+    for (const fid of Object.keys(state.factions) as FactionType[]) {
+      const actions = getDiplomaticActions(fid, state.factions[fid].reputation);
+      const found = actions.find((a) => a.id === actionId);
+      if (found) {
+        targetFaction = fid;
+        matchedAction = found;
+        break;
+      }
+    }
+
+    if (!targetFaction || !matchedAction) {
+      return { success: false, message: '找不到该外交行动' };
+    }
+
+    const faction = state.factions[targetFaction];
+    const now = Date.now();
+    if (now - faction.lastInteraction < matchedAction.cooldown * 1000) {
+      return { success: false, message: '该行动冷却中，请稍后再试' };
+    }
+
+    if (!state.canAfford(matchedAction.cost)) {
+      return { success: false, message: '资源不足' };
+    }
+
+    state.spendResources(matchedAction.cost);
+
+    const success = Math.random() < matchedAction.successRate;
+    const repChange = success ? matchedAction.reputationChange.success : matchedAction.reputationChange.fail;
+
+    if (matchedAction.type === 'gift' && success) {
+      state.changeFactionReputation(targetFaction, repChange);
+      return { success: true, message: `礼物被欣然接受，${FACTIONS[targetFaction].name}对我们的好感提升了！` };
+    }
+
+    if (matchedAction.type === 'gift' && !success) {
+      return { success: false, message: '礼物似乎不太合心意...' };
+    }
+
+    if (matchedAction.type === 'trade_treaty') {
+      if (success) {
+        state.changeFactionReputation(targetFaction, repChange);
+        const newFactions = { ...state.factions };
+        newFactions[targetFaction] = { ...newFactions[targetFaction], tradeUnlocked: true };
+        set({
+          factions: newFactions,
+          trades: generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions),
+        });
+        return { success: true, message: `与${FACTIONS[targetFaction].name}签订了贸易条约！` };
+      } else {
+        state.changeFactionReputation(targetFaction, repChange);
+        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝了贸易条约...` };
+      }
+    }
+
+    if (matchedAction.type === 'military_aid_request') {
+      if (success) {
+        state.changeFactionReputation(targetFaction, repChange);
+        state.requestMilitaryAid(targetFaction);
+        return { success: true, message: `${FACTIONS[targetFaction].name}答应派遣援军！` };
+      } else {
+        state.changeFactionReputation(targetFaction, repChange);
+        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝了援助请求...` };
+      }
+    }
+
+    if (matchedAction.type === 'alliance_proposal') {
+      if (success) {
+        state.changeFactionReputation(targetFaction, repChange);
+        const newFactions = { ...state.factions };
+        newFactions[targetFaction] = {
+          ...newFactions[targetFaction],
+          reputation: Math.min(100, newFactions[targetFaction].reputation),
+          stance: 'ally',
+        };
+        set({ factions: newFactions });
+        return { success: true, message: `与${FACTIONS[targetFaction].name}缔结了同盟！` };
+      } else {
+        state.changeFactionReputation(targetFaction, repChange);
+        return { success: false, message: `${FACTIONS[targetFaction].name}婉拒了同盟提议...` };
+      }
+    }
+
+    if (matchedAction.type === 'threaten') {
+      if (success) {
+        state.changeFactionReputation(targetFaction, repChange);
+        const loot: Partial<Resources> = { gold: 40, food: 30 };
+        state.addResources(loot);
+        return { success: true, message: `武力威慑成功，${FACTIONS[targetFaction].name}缴纳了贡品！` };
+      } else {
+        state.changeFactionReputation(targetFaction, repChange);
+        return { success: false, message: `${FACTIONS[targetFaction].name}拒绝屈服，关系恶化！` };
+      }
+    }
+
+    if (matchedAction.type === 'espionage') {
+      if (success) {
+        state.changeFactionReputation(targetFaction, repChange);
+        const config = FACTIONS[targetFaction];
+        const loot: Partial<Resources> = {};
+        if (config.speciality !== 'warriors' && config.speciality !== 'knowledge') {
+          loot[config.speciality as keyof Resources] = 50;
+        }
+        loot.gold = 30;
+        state.addResources(loot);
+        return { success: true, message: `间谍行动成功，获得了大量资源！` };
+      } else {
+        state.changeFactionReputation(targetFaction, repChange);
+        return { success: false, message: `间谍被抓获，与${FACTIONS[targetFaction].name}关系严重恶化！` };
+      }
+    }
+
+    if (matchedAction.type === 'denounce') {
+      state.changeFactionReputation(targetFaction, repChange);
+      for (const fid of Object.keys(state.factions) as FactionType[]) {
+        if (fid !== targetFaction && state.factions[fid].stance === 'enemy') {
+          if (state.factions[fid].id !== targetFaction) {
+            state.changeFactionReputation(fid, 5);
+          }
+        }
+      }
+      return { success: true, message: `公开谴责了${FACTIONS[targetFaction].name}！` };
+    }
+
+    return { success: false, message: '未知行动' };
+  },
+
+  getAvailableDiplomaticActions: (factionId) => {
+    const state = get();
+    const faction = state.factions[factionId];
+    if (!faction) return [];
+    return getDiplomaticActions(factionId, faction.reputation);
+  },
+
+  resolveDiplomaticEvent: (eventId, choiceId) => {
+    const state = get();
+    const event = state.activeDiplomaticEvents.find((e) => e.id === eventId);
+    if (!event) return;
+
+    const choice = event.choices.find((c) => c.id === choiceId);
+    if (!choice) return;
+
+    const effects = choice.effects;
+
+    if (effects.reputationChanges) {
+      for (const [fid, amount] of Object.entries(effects.reputationChanges)) {
+        state.changeFactionReputation(fid as FactionType, amount as number);
+      }
+    }
+
+    if (effects.resourceChanges) {
+      const resourceGain: Partial<Resources> = {};
+      const resourceCost: Partial<Resources> = {};
+      for (const [key, amount] of Object.entries(effects.resourceChanges)) {
+        if ((amount as number) > 0) {
+          resourceGain[key as keyof Resources] = amount as number;
+        } else {
+          resourceCost[key as keyof Resources] = Math.abs(amount as number);
+        }
+      }
+      if (Object.keys(resourceCost).length > 0) {
+        state.spendResources(resourceCost);
+      }
+      if (Object.keys(resourceGain).length > 0) {
+        state.addResources(resourceGain);
+      }
+    }
+
+    if (effects.populationChange) {
+      const newPop = Math.max(0, Math.min(state.maxPopulation, state.population + effects.populationChange));
+      set({ population: newPop });
+    }
+
+    if (effects.loyaltyChange) {
+      const newLoyalty = Math.max(0, Math.min(100, state.loyalty + effects.loyaltyChange));
+      set({
+        loyalty: newLoyalty,
+        recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+      });
+    }
+
+    if (effects.triggerEnding) {
+      state.triggerEnding(effects.triggerEnding);
+    }
+
+    set({
+      activeDiplomaticEvents: state.activeDiplomaticEvents.filter((e) => e.id !== eventId),
+    });
+  },
+
+  processDiplomaticTick: (delta) => {
+    const state = get();
+
+    let newCooldown = state.diplomaticEventCooldown - delta;
+
+    if (newCooldown <= 0 && state.activeDiplomaticEvents.length < 2 && !state.gameEnding) {
+      const event = triggerRandomDiplomaticEvent(Math.floor(state.day), state.factions);
+      if (event) {
+        const activeEvent: ActiveDiplomaticEvent = {
+          id: generateId(),
+          eventId: event.id,
+          type: event.type,
+          name: event.name,
+          icon: event.icon,
+          description: event.description,
+          factionId: event.factionId,
+          choices: event.choices,
+          triggeredAt: Date.now(),
+        };
+        set({
+          activeDiplomaticEvents: [...state.activeDiplomaticEvents, activeEvent],
+        });
+      }
+      newCooldown = getDiplomaticEventInterval();
+    }
+
+    set({ diplomaticEventCooldown: newCooldown });
+  },
+
+  dismissDiplomaticEvent: (eventId) => {
+    const state = get();
+    set({
+      activeDiplomaticEvents: state.activeDiplomaticEvents.filter((e) => e.id !== eventId),
+    });
+  },
+
+  requestMilitaryAid: (factionId) => {
+    const state = get();
+    const faction = state.factions[factionId];
+    const config = FACTIONS[factionId];
+    if (!faction || !config) return false;
+    if (faction.stance !== 'ally' && faction.stance !== 'friendly') return false;
+
+    const strength = config.militaryStrength;
+    const warriorCount = Math.max(2, Math.floor(strength / 20));
+
+    const reinforcement: AllyReinforcement = {
+      id: generateId(),
+      factionId,
+      factionName: config.name,
+      factionIcon: config.icon,
+      warriors: [
+        {
+          type: 'grunt',
+          count: warriorCount,
+          attack: Math.floor(8 * (strength / 80)),
+          defense: Math.floor(4 * (strength / 80)),
+          hp: Math.floor(40 * (strength / 80)),
+        },
+        {
+          type: 'archer',
+          count: Math.floor(warriorCount * 0.5),
+          attack: Math.floor(10 * (strength / 80)),
+          defense: Math.floor(3 * (strength / 80)),
+          hp: Math.floor(30 * (strength / 80)),
+        },
+      ],
+      duration: 180,
+      summonedAt: Date.now(),
+    };
+
+    set({
+      allyReinforcements: [...state.allyReinforcements, reinforcement],
+    });
+    return true;
+  },
+
+  processAllyReinforcementsTick: (delta) => {
+    const state = get();
+    const newReinforcements = state.allyReinforcements
+      .map((r) => ({ ...r, duration: r.duration - delta }))
+      .filter((r) => r.duration > 0);
+
+    if (newReinforcements.length !== state.allyReinforcements.length) {
+      set({ allyReinforcements: newReinforcements });
+    }
+  },
+
+  checkForEnding: () => {
+    const state = get();
+    return checkEndingConditions(state);
+  },
+
+  triggerEnding: (endingType) => {
+    const state = get();
+    if (state.gameEnding) return;
+
+    const factionRelations: Record<FactionType, number> = {} as Record<FactionType, number>;
+    for (const [fid, faction] of Object.entries(state.factions)) {
+      factionRelations[fid as FactionType] = faction.reputation;
+    }
+
+    const ending: GameEnding = {
+      ending: endingType,
+      triggeredAt: Date.now(),
+      stats: {
+        finalDay: Math.floor(state.day),
+        totalWins: state.totalWins,
+        totalLosses: state.totalLosses,
+        finalPopulation: state.population,
+        totalTrades: state.totalTrades,
+        totalExpeditions: state.totalExpeditions,
+        factionRelations,
+      },
+    };
+
+    set({ gameEnding: ending });
   },
 
   processWeatherTick: (delta) => {
@@ -1810,7 +2225,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: 0,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
       });
       seasonChanged = true;
       weatherChanged = true;
@@ -1821,7 +2236,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: newSeasonProgress,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
       });
       weatherChanged = true;
     } else {
@@ -1836,6 +2251,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   tick: (delta) => {
     const state = get();
+
+    if (state.gameEnding) return;
 
     state.processWeatherTick(delta);
 
@@ -1852,6 +2269,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processExpeditionTick(delta);
     state.processResearch(delta);
     state.processTaskTick(delta);
+    state.processDiplomaticTick(delta);
+    state.processAllyReinforcementsTick(delta);
+
+    const ending = state.checkForEnding();
+    if (ending) {
+      state.triggerEnding(ending);
+    }
 
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {

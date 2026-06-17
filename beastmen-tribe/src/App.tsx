@@ -11,9 +11,11 @@ import { ExpeditionPanel } from './components/ExpeditionPanel';
 import { TechTreePanel } from './components/TechTreePanel';
 import { TaskPanel } from './components/TaskPanel';
 import { WeatherPanel } from './components/WeatherPanel';
+import { DiplomacyPanel } from './components/DiplomacyPanel';
+import { EndingPanel } from './components/EndingPanel';
 import './App.css';
 
-type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'task' | 'trade' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'task' | 'trade' | 'diplomacy' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'population', label: '人口', icon: '👥' },
@@ -24,6 +26,7 @@ const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'expedition', label: '远征', icon: '🗡️' },
   { id: 'task', label: '委托', icon: '📜' },
   { id: 'trade', label: '交易', icon: '🏪' },
+  { id: 'diplomacy', label: '外交', icon: '🏛️' },
   { id: 'save', label: '设置', icon: '💾' },
 ];
 
@@ -47,6 +50,7 @@ function App() {
   return (
     <div className="app">
       <ResourceBar />
+      <EndingPanel />
 
       <div className="main-content">
         <div className="game-area">
@@ -77,6 +81,7 @@ function App() {
             {activeTab === 'expedition' && <ExpeditionPanel />}
             {activeTab === 'task' && <TaskPanel />}
             {activeTab === 'trade' && <TradePanel />}
+            {activeTab === 'diplomacy' && <DiplomacyPanel />}
             {activeTab === 'save' && <SavePanel />}
           </div>
         </div>

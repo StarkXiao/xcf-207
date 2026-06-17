@@ -370,6 +370,8 @@ export interface TaskChain {
   chainReward: Partial<Resources>;
   chainBonusLoyalty: number;
   completed: boolean;
+  chainRewardClaimed: boolean;
+  failed: boolean;
 }
 
 export interface GameState {

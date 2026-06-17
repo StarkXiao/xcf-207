@@ -79,16 +79,13 @@ function TaskChainCard({
   onClaimStage: (chainId: string, taskId: string, stageIndex: number) => boolean;
   onClaimChain: (chainId: string) => boolean;
 }) {
-  const chainFailed = chain.tasks.some(
-    (t, i) => i <= chain.currentTaskIndex && t.status === 'failed'
-  );
-  const allTasksCompleted = chain.tasks.every((t) => t.status === 'completed');
   const allStagesClaimed = chain.tasks.every((t) =>
     t.stages.every((s) => t.claimedStages.includes(s.index))
   );
+  const canClaimChainReward = chain.completed && allStagesClaimed && !chain.chainRewardClaimed;
 
   return (
-    <div className={`task-chain-card ${chain.completed ? 'chain-completed' : ''} ${chainFailed ? 'chain-failed' : ''}`}>
+    <div className={`task-chain-card ${chain.completed ? 'chain-completed' : ''} ${chain.failed ? 'chain-failed' : ''}`}>
       <div className="chain-header">
         <span className="chain-icon">{chain.icon}</span>
         <div className="chain-info">
@@ -97,7 +94,7 @@ function TaskChainCard({
             进度：{chain.tasks.filter((t) => t.status === 'completed').length}/{chain.tasks.length} 任务
           </div>
         </div>
-        {chain.completed && allStagesClaimed && (
+        {canClaimChainReward && (
           <button
             className="btn btn-primary btn-small chain-claim-btn"
             onClick={() => onClaimChain(chain.id)}
@@ -105,18 +102,21 @@ function TaskChainCard({
             🎁 领取链奖励
           </button>
         )}
-        {chain.completed && !allStagesClaimed && (
+        {chain.completed && chain.chainRewardClaimed && (
+          <span className="chain-badge chain-badge-complete">✅ 已领奖</span>
+        )}
+        {chain.completed && !chain.chainRewardClaimed && !canClaimChainReward && (
           <span className="chain-badge chain-badge-complete">✅ 已完成</span>
         )}
-        {chainFailed && (
+        {chain.failed && (
           <span className="chain-badge chain-badge-fail">❌ 已失败</span>
         )}
       </div>
 
       <div className="chain-timeline">
         {chain.tasks.map((task, i) => {
-          const isCurrent = i === chain.currentTaskIndex && !chain.completed && !chainFailed;
-          const isLocked = i > chain.currentTaskIndex && !chain.completed && !chainFailed;
+          const isCurrent = i === chain.currentTaskIndex && !chain.completed && !chain.failed;
+          const isLocked = i > chain.currentTaskIndex && !chain.completed && !chain.failed;
           return (
             <div key={task.id} className="chain-task-wrapper">
               <div className={`chain-connector ${i === 0 ? 'connector-first' : ''} ${isCurrent || task.status !== 'active' || i < chain.currentTaskIndex ? 'connector-active' : ''}`} />
@@ -132,7 +132,7 @@ function TaskChainCard({
         })}
       </div>
 
-      {(chain.completed || chainFailed) && (
+      {(chain.completed || chain.failed) && (
         <div className="chain-reward-preview">
           <span className="chain-reward-label">链完成奖励：</span>
           <div className="chain-reward-items">

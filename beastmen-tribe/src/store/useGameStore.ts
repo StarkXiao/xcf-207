@@ -137,6 +137,8 @@ const createTaskChains = (currentDay: number): TaskChain[] => {
     chainReward: { ...chainConfig.chainReward },
     chainBonusLoyalty: chainConfig.chainBonusLoyalty,
     completed: false,
+    chainRewardClaimed: false,
+    failed: false,
   }));
 };
 
@@ -255,6 +257,13 @@ const loadSave = (): GameState => {
       state.taskRefreshInterval = parsed.taskRefreshInterval ?? TASK_REFRESH_INTERVAL;
       state.totalChainsCompleted = parsed.totalChainsCompleted || 0;
       state.totalChainsFailed = parsed.totalChainsFailed || 0;
+      if (state.taskChains.length > 0) {
+        state.taskChains = state.taskChains.map((c) => ({
+          ...c,
+          chainRewardClaimed: c.chainRewardClaimed ?? false,
+          failed: c.failed ?? c.tasks.some((t) => t.status === 'failed'),
+        }));
+      }
       return state;
     }
   } catch (e) {
@@ -1450,79 +1459,110 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const currentDay = Math.floor(state.day);
 
+    let totalPenaltyResources: Partial<Resources> = {};
+    let totalPenaltyLoyalty = 0;
+    let completedCount = state.totalChainsCompleted;
+    let failedCount = state.totalChainsFailed;
+
     for (const chain of state.taskChains) {
-      if (chain.completed) continue;
+      if (chain.completed && chain.chainRewardClaimed) {
+        completedCount++;
+        continue;
+      }
+      if (chain.completed && !chain.chainRewardClaimed) {
+        completedCount++;
+        continue;
+      }
+      if (chain.failed) {
+        failedCount++;
+        continue;
+      }
+
       for (const task of chain.tasks) {
+        if (task.status === 'failed') {
+          failedCount++;
+          break;
+        }
         if (task.status !== 'active') continue;
+
         const elapsed = currentDay - Math.floor(task.startedAtDay);
         if (elapsed >= task.duration) {
           const lastStage = task.stages[task.stages.length - 1];
-          const completed = task.progress >= lastStage.requiredProgress;
-          if (!completed) {
-            task.status = 'failed';
-            const penalty: Partial<Resources> = {};
+          const taskCompleted = task.progress >= lastStage.requiredProgress;
+          if (!taskCompleted) {
             for (const [key, amount] of Object.entries(task.failurePenalty)) {
-              penalty[key as keyof Resources] = amount as number;
+              const k = key as keyof Resources;
+              totalPenaltyResources[k] = (totalPenaltyResources[k] || 0) + (amount as number);
             }
-            state.addResources(penalty);
-            let newLoyalty = state.loyalty;
             if (task.penaltyLoyalty) {
-              newLoyalty = Math.max(0, newLoyalty + task.penaltyLoyalty);
+              totalPenaltyLoyalty += task.penaltyLoyalty;
             }
-            set({ loyalty: newLoyalty, recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents) });
+            failedCount++;
+            break;
           }
         }
       }
     }
 
-    const allChainsDone = state.taskChains.every(
-      (c) => c.completed || c.tasks.every((t) => t.status === 'failed' || t.status === 'completed')
-    );
-
-    if (allChainsDone || currentDay - state.lastTaskRefreshDay >= state.taskRefreshInterval) {
-      const newChains = createTaskChains(currentDay);
-      let completed = state.totalChainsCompleted;
-      let failed = state.totalChainsFailed;
-
-      for (const chain of state.taskChains) {
-        if (chain.completed) {
-          completed++;
-        } else if (chain.tasks.some((t) => t.status === 'failed')) {
-          failed++;
-        }
-      }
-
-      set({
-        taskChains: newChains,
-        lastTaskRefreshDay: currentDay,
-        totalChainsCompleted: completed,
-        totalChainsFailed: failed,
-      });
+    if (Object.keys(totalPenaltyResources).length > 0) {
+      state.addResources(totalPenaltyResources);
     }
+
+    let newLoyalty = state.loyalty;
+    if (totalPenaltyLoyalty !== 0) {
+      newLoyalty = Math.max(0, newLoyalty + totalPenaltyLoyalty);
+    }
+
+    const newChains = createTaskChains(currentDay);
+
+    set({
+      taskChains: newChains,
+      lastTaskRefreshDay: currentDay,
+      totalChainsCompleted: completedCount,
+      totalChainsFailed: failedCount,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
   },
 
   processTaskTick: (_delta) => {
     const state = get();
     const currentDay = Math.floor(state.day);
 
-    let needsRefresh = false;
+    let totalPenaltyResources: Partial<Resources> = {};
+    let totalPenaltyLoyalty = 0;
+    let hasPenalty = false;
+
     const updatedChains = state.taskChains.map((chain) => {
-      if (chain.completed) return chain;
+      if (chain.completed || chain.failed) return chain;
 
       let chainModified = false;
-      const updatedTasks = chain.tasks.map((task) => {
+      let chainFailed = false;
+
+      const updatedTasks = chain.tasks.map((task, taskIdx) => {
         if (task.status !== 'active') return task;
+        if (taskIdx > chain.currentTaskIndex) return task;
 
         const elapsed = currentDay - Math.floor(task.startedAtDay);
         if (elapsed >= task.duration) {
           const lastStage = task.stages[task.stages.length - 1];
-          const completed = task.progress >= lastStage.requiredProgress;
-          if (completed) {
-            chainModified = true;
-            return { ...task, status: 'completed' as const };
-          } else {
+          const taskCompleted = task.progress >= lastStage.requiredProgress;
+
+          if (!taskCompleted) {
+            hasPenalty = true;
+            for (const [key, amount] of Object.entries(task.failurePenalty)) {
+              const k = key as keyof Resources;
+              totalPenaltyResources[k] = (totalPenaltyResources[k] || 0) + (amount as number);
+            }
+            if (task.penaltyLoyalty) {
+              totalPenaltyLoyalty += task.penaltyLoyalty;
+            }
+            chainFailed = true;
             chainModified = true;
             return { ...task, status: 'failed' as const };
+          } else {
+            chainModified = true;
+            return { ...task, status: 'completed' as const };
           }
         }
         return task;
@@ -1530,44 +1570,51 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       if (!chainModified) return chain;
 
-      const allCurrentDone = updatedTasks
-        .filter((_, i) => i <= chain.currentTaskIndex)
-        .every((t) => t.status === 'completed' || t.status === 'failed');
-
       let newCurrentIndex = chain.currentTaskIndex;
-      if (allCurrentDone && chain.currentTaskIndex < updatedTasks.length - 1) {
-        const nextTask = updatedTasks[chain.currentTaskIndex];
-        if (nextTask.status === 'completed') {
+      if (chainFailed) {
+        return { ...chain, tasks: updatedTasks, failed: true };
+      }
+
+      const currentTask = updatedTasks[chain.currentTaskIndex];
+      if (currentTask && currentTask.status === 'completed') {
+        if (chain.currentTaskIndex < updatedTasks.length - 1) {
           newCurrentIndex = chain.currentTaskIndex + 1;
         }
       }
 
-      const chainComplete = updatedTasks.every(
-        (t) => t.status === 'completed'
-      );
-      const chainFailed = updatedTasks.some(
-        (t, i) => i <= newCurrentIndex && t.status === 'failed'
-      );
-
-      if (chainComplete || chainFailed) {
-        needsRefresh = true;
-      }
+      const allCompleted = updatedTasks.every((t) => t.status === 'completed');
 
       return {
         ...chain,
         tasks: updatedTasks,
         currentTaskIndex: newCurrentIndex,
-        completed: chainComplete,
+        completed: allCompleted,
       };
     });
 
-    set({ taskChains: updatedChains });
-
-    if (needsRefresh) {
-      const currentDay = Math.floor(state.day);
-      if (currentDay - state.lastTaskRefreshDay >= state.taskRefreshInterval) {
-        state.refreshTaskChains();
+    if (hasPenalty) {
+      if (Object.keys(totalPenaltyResources).length > 0) {
+        state.addResources(totalPenaltyResources);
       }
+    }
+
+    let newLoyalty = state.loyalty;
+    if (totalPenaltyLoyalty !== 0) {
+      newLoyalty = Math.max(0, newLoyalty + totalPenaltyLoyalty);
+    }
+
+    set({
+      taskChains: updatedChains,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    const nextState = get();
+    const allChainsResolved = nextState.taskChains.every(
+      (c) => c.completed || c.failed
+    );
+    if (allChainsResolved || currentDay - nextState.lastTaskRefreshDay >= nextState.taskRefreshInterval) {
+      nextState.refreshTaskChains();
     }
   },
 
@@ -1647,7 +1694,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   claimChainReward: (chainId) => {
     const state = get();
     const chain = state.taskChains.find((c) => c.id === chainId);
-    if (!chain || !chain.completed) return false;
+    if (!chain || !chain.completed || chain.chainRewardClaimed) return false;
 
     const allClaimed = chain.tasks.every((t) =>
       t.stages.every((s) => t.claimedStages.includes(s.index))
@@ -1657,7 +1704,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.addResources(chain.chainReward);
     const newLoyalty = Math.min(100, state.loyalty + chain.chainBonusLoyalty);
 
+    const updatedChains = state.taskChains.map((c) =>
+      c.id === chainId ? { ...c, chainRewardClaimed: true } : c
+    );
+
     set({
+      taskChains: updatedChains,
       loyalty: newLoyalty,
       recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
       totalChainsCompleted: state.totalChainsCompleted + 1,

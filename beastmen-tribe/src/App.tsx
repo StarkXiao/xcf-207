@@ -6,11 +6,13 @@ import { WarriorPanel } from './components/WarriorPanel';
 import { BattlePanel } from './components/BattlePanel';
 import { TradePanel } from './components/TradePanel';
 import { SavePanel } from './components/SavePanel';
+import { PopulationPanel } from './components/PopulationPanel';
 import './App.css';
 
-type TabType = 'building' | 'warrior' | 'battle' | 'trade' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'battle' | 'trade' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
+  { id: 'population', label: '人口', icon: '👥' },
   { id: 'building', label: '建设', icon: '🏗️' },
   { id: 'warrior', label: '训练', icon: '⚔️' },
   { id: 'battle', label: '战斗', icon: '🛡️' },
@@ -21,7 +23,7 @@ const TABS: { id: TabType; label: string; icon: string }[] = [
 function App() {
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<any>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('building');
+  const [activeTab, setActiveTab] = useState<TabType>('population');
 
   useEffect(() => {
     if (gameContainerRef.current && !gameRef.current) {
@@ -59,6 +61,7 @@ function App() {
           </div>
 
           <div className="panel-content">
+            {activeTab === 'population' && <PopulationPanel />}
             {activeTab === 'building' && <BuildingPanel gameRef={gameRef} />}
             {activeTab === 'warrior' && <WarriorPanel />}
             {activeTab === 'battle' && <BattlePanel />}

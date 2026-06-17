@@ -11,6 +11,8 @@ export function WarriorPanel() {
   const trainWarrior = useGameStore((s) => s.trainWarrior);
   const canAfford = useGameStore((s) => s.canAfford);
   const resources = useGameStore((s) => s.resources);
+  const recruitEfficiency = useGameStore((s) => s.recruitEfficiency);
+  const loyalty = useGameStore((s) => s.loyalty);
 
   const totalPower = warriors.reduce(
     (sum, w) => sum + w.attack + w.defense + Math.floor(w.hp / 5),
@@ -36,6 +38,13 @@ export function WarriorPanel() {
         <div className="stat-item">
           <span className="stat-label">总战力</span>
           <span className="stat-value power">{totalPower}</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-label">征兵效率</span>
+          <span className={`stat-value ${recruitEfficiency >= 1 ? 'power' : 'low-efficiency'}`}>
+            {Math.floor(recruitEfficiency * 100)}%
+          </span>
+          <span className="stat-sublabel">忠诚{Math.floor(loyalty)}%</span>
         </div>
       </div>
 

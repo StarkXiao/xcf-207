@@ -118,6 +118,45 @@ export interface TradeOffer {
   stock: number;
 }
 
+export type EventEffectType =
+  | 'population_change'
+  | 'loyalty_change'
+  | 'food_change'
+  | 'resource_change'
+  | 'recruit_boost'
+  | 'plague'
+  | 'festival'
+  | 'migration';
+
+export interface EventEffect {
+  type: EventEffectType;
+  value: number;
+  resource?: ResourceType;
+}
+
+export interface TribeEventConfig {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  effects: EventEffect[];
+  minDay: number;
+  minLoyalty?: number;
+  maxLoyalty?: number;
+  weight: number;
+}
+
+export interface ActiveTribeEvent {
+  id: string;
+  eventId: string;
+  name: string;
+  icon: string;
+  description: string;
+  effects: EventEffect[];
+  appliedAt: number;
+  duration: number;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -133,4 +172,11 @@ export interface GameState {
   lastSave: number;
   totalWins: number;
   totalLosses: number;
+  population: number;
+  maxPopulation: number;
+  loyalty: number;
+  foodConsumptionRate: number;
+  activeEvents: ActiveTribeEvent[];
+  eventCooldown: number;
+  recruitEfficiency: number;
 }

@@ -9,15 +9,55 @@ import type {
   TrainingQueue,
   Invasion,
   Enemy,
+  ActiveTribeEvent,
+  EventEffect,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
 import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
+import { triggerRandomEvent } from '../data/events';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+const FOOD_PER_POP = 0.5;
+const BASE_POP_CAPACITY = 10;
+const POP_GROWTH_RATE = 0.02;
+const LOYALTY_FOOD_THRESHOLD = 10;
+const LOYALTY_DECAY_NO_FOOD = 0.5;
+const LOYALTY_RECOVERY_WELL_FED = 0.1;
+const EVENT_INTERVAL_MIN = 60;
+const EVENT_INTERVAL_MAX = 120;
+
+const calculateMaxPopulation = (buildings: Building[]): number => {
+  let cap = BASE_POP_CAPACITY;
+  for (const b of buildings) {
+    if (b.isBuilding) continue;
+    const config = BUILDINGS[b.type];
+    if (config?.baseCapacity) {
+      if (b.type === 'hut') {
+        cap += config.baseCapacity * b.level;
+      } else if (b.type === 'townhall') {
+        cap += Math.floor(config.baseCapacity * b.level * 0.5);
+      }
+    }
+  }
+  return cap;
+};
+
+const calculateRecruitEfficiency = (loyalty: number, activeEvents: ActiveTribeEvent[]): number => {
+  let efficiency = 0.5 + (loyalty / 100) * 0.5;
+  for (const event of activeEvents) {
+    for (const effect of event.effects) {
+      if (effect.type === 'recruit_boost') {
+        efficiency += effect.value;
+      }
+    }
+  }
+  return Math.max(0.2, Math.min(2.0, efficiency));
+};
 
 const createInitialState = (): GameState => ({
   tribeName: '血牙部落',
@@ -51,6 +91,13 @@ const createInitialState = (): GameState => ({
   lastSave: Date.now(),
   totalWins: 0,
   totalLosses: 0,
+  population: 8,
+  maxPopulation: BASE_POP_CAPACITY + 5,
+  loyalty: 70,
+  foodConsumptionRate: FOOD_PER_POP,
+  activeEvents: [],
+  eventCooldown: EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
+  recruitEfficiency: 0.5 + (70 / 100) * 0.5,
 });
 
 const loadSave = (): GameState => {
@@ -58,11 +105,22 @@ const loadSave = (): GameState => {
     const saved = localStorage.getItem(SAVE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved) as GameState;
-      return {
+      const state: GameState = {
+        ...createInitialState(),
         ...parsed,
         trades: generateTrades(6),
         selectedBuildingId: null,
+        activeEvents: parsed.activeEvents || [],
+        population: parsed.population ?? 8,
+        maxPopulation: parsed.maxPopulation ?? calculateMaxPopulation(parsed.buildings),
+        loyalty: parsed.loyalty ?? 70,
+        foodConsumptionRate: parsed.foodConsumptionRate ?? FOOD_PER_POP,
+        eventCooldown: parsed.eventCooldown ?? EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
+        recruitEfficiency: parsed.recruitEfficiency ?? 0.5 + ((parsed.loyalty ?? 70) / 100) * 0.5,
       };
+      state.maxPopulation = calculateMaxPopulation(state.buildings);
+      state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
+      return state;
     }
   } catch (e) {
     console.error('Failed to load save:', e);
@@ -88,6 +146,11 @@ interface GameStore extends GameState {
 
   executeTrade: (tradeId: string) => boolean;
   refreshTrades: () => void;
+
+  applyEventEffects: (effects: EventEffect[]) => void;
+  processPopulationTick: (delta: number) => void;
+  processEventTick: (delta: number) => void;
+  dismissEvent: (eventId: string) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -150,9 +213,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!newUnlocked.includes('smithy')) newUnlocked.push('smithy');
     }
 
+    const newBuildings = [...state.buildings, newBuilding];
     set({
-      buildings: [...state.buildings, newBuilding],
+      buildings: newBuildings,
       unlockedBuildings: newUnlocked,
+      maxPopulation: calculateMaxPopulation(newBuildings),
     });
     return true;
   },
@@ -199,6 +264,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       buildings: newBuildings,
       unlockedWarriors: newWarriors,
       unlockedBuildings: newUnlockedBuildings,
+      maxPopulation: calculateMaxPopulation(newBuildings),
     });
     return true;
   },
@@ -242,6 +308,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (!state.spendResources(config.cost)) return false;
 
+    const effectiveTrainTime = config.trainTime / state.recruitEfficiency;
+
     const existingQueue = state.trainingQueue.find((q) => q.type === type);
     if (existingQueue) {
       set({
@@ -256,7 +324,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           {
             type,
             progress: 0,
-            total: config.trainTime,
+            total: effectiveTrainTime,
             count: 1,
           },
         ],
@@ -273,7 +341,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const newQueue: TrainingQueue[] = [];
 
     for (const queue of state.trainingQueue) {
-      let newProgress = queue.progress + delta;
+      const adjustedDelta = delta * state.recruitEfficiency;
+      let newProgress = queue.progress + adjustedDelta;
       let newCount = queue.count;
 
       while (newProgress >= queue.total && newCount > 0) {
@@ -354,9 +423,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       .filter((b) => b.type === 'wall')
       .reduce((sum, b) => sum + b.level * 10, 0);
 
+    const loyaltyBonus = Math.floor(state.loyalty / 20);
     log.push(`⚔️ 第 ${invasion.wave} 波入侵开始！`);
     log.push(`敌人：${enemies.map((e) => ENEMIES[e.type].name).join(', ')}`);
-    log.push(`我方防御加成：+${wallLevel}`);
+    log.push(`我方防御加成：+${wallLevel}，士气加成：+${loyaltyBonus}`);
 
     let round = 0;
     while (myWarriors.length > 0 && enemies.length > 0 && round < 20) {
@@ -366,7 +436,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       for (const warrior of myWarriors) {
         if (enemies.length === 0) break;
         const target = enemies[0];
-        const damage = Math.max(1, warrior.attack - target.defense / 2);
+        const damage = Math.max(1, warrior.attack + loyaltyBonus * 0.5 - target.defense / 2);
         target.hp -= damage;
         log.push(`${WARRIORS[warrior.type].name} 攻击 ${ENEMIES[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
         if (target.hp <= 0) {
@@ -391,9 +461,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const victory = enemies.length === 0 && myWarriors.length > 0;
     log.push(victory ? '🏆 胜利！部落成功抵御入侵！' : '💔 失败...部落遭受重创');
 
+    const newLoyalty = Math.min(100, state.loyalty + (victory ? 5 : -8));
+    const newPopulation = Math.max(0, state.population + (victory ? 0 : -1));
+
     if (victory) {
       state.addResources(invasion.rewards);
       log.push(`获得奖励：${Object.entries(invasion.rewards).map(([k, v]) => `${k}+${v}`).join(', ')}`);
+    } else {
+      log.push(`人口因战败减少了 ${state.population - newPopulation} 人，忠诚下降`);
     }
 
     set({
@@ -401,6 +476,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       invasion: { ...invasion, isActive: false, enemies, result: victory ? 'victory' : 'defeat' },
       totalWins: state.totalWins + (victory ? 1 : 0),
       totalLosses: state.totalLosses + (victory ? 0 : 1),
+      loyalty: newLoyalty,
+      population: newPopulation,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
     });
 
     return { result: victory ? 'victory' : 'defeat', log };
@@ -430,11 +508,144 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ trades: generateTrades(6) });
   },
 
+  applyEventEffects: (effects) => {
+    const state = get();
+    let newPopulation = state.population;
+    let newLoyalty = state.loyalty;
+    const resourceGain: Partial<Resources> = {};
+
+    for (const effect of effects) {
+      switch (effect.type) {
+        case 'population_change':
+          newPopulation += effect.value;
+          break;
+        case 'loyalty_change':
+          newLoyalty += effect.value;
+          break;
+        case 'food_change':
+          resourceGain.food = (resourceGain.food || 0) + effect.value;
+          break;
+        case 'resource_change':
+          if (effect.resource) {
+            resourceGain[effect.resource] = (resourceGain[effect.resource] || 0) + effect.value;
+          }
+          break;
+        case 'plague':
+          newPopulation = Math.max(0, newPopulation - effect.value);
+          break;
+        case 'festival':
+          newLoyalty = Math.min(100, newLoyalty + effect.value);
+          break;
+        case 'migration':
+          newPopulation += effect.value;
+          break;
+        case 'recruit_boost':
+          break;
+      }
+    }
+
+    newPopulation = Math.max(0, Math.min(newPopulation, state.maxPopulation));
+    newLoyalty = Math.max(0, Math.min(100, newLoyalty));
+
+    if (Object.keys(resourceGain).length > 0) {
+      state.addResources(resourceGain);
+    }
+
+    set({
+      population: newPopulation,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+  },
+
+  processPopulationTick: (delta) => {
+    const state = get();
+    if (state.population <= 0) return;
+
+    const foodConsumed = state.population * state.foodConsumptionRate * delta;
+    let newFood = state.resources.food - foodConsumed;
+    let newLoyalty = state.loyalty;
+    let newPopulation = state.population;
+
+    if (newFood < 0) {
+      newFood = 0;
+      newLoyalty -= LOYALTY_DECAY_NO_FOOD * delta;
+    } else {
+      if (newFood > LOYALTY_FOOD_THRESHOLD) {
+        newLoyalty += LOYALTY_RECOVERY_WELL_FED * delta;
+      }
+    }
+
+    if (newLoyalty < 20 && Math.random() < 0.01 * delta) {
+      newPopulation = Math.max(0, newPopulation - 1);
+    }
+
+    if (newLoyalty > 50 && newPopulation < state.maxPopulation) {
+      const growthChance = POP_GROWTH_RATE * (newLoyalty / 100) * delta;
+      if (Math.random() < growthChance) {
+        newPopulation = Math.min(state.maxPopulation, newPopulation + 1);
+      }
+    }
+
+    newLoyalty = Math.max(0, Math.min(100, newLoyalty));
+
+    set({
+      resources: { ...state.resources, food: Math.max(0, newFood) },
+      loyalty: newLoyalty,
+      population: newPopulation,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+  },
+
+  processEventTick: (delta) => {
+    const state = get();
+
+    const newEvents = state.activeEvents
+      .map((e) => ({ ...e, duration: e.duration - delta }))
+      .filter((e) => e.duration > 0);
+
+    let cooldown = state.eventCooldown - delta;
+
+    if (cooldown <= 0) {
+      const event = triggerRandomEvent(Math.floor(state.day), state.loyalty, state.population);
+      if (event) {
+        const activeEvent: ActiveTribeEvent = {
+          id: generateId(),
+          eventId: event.id,
+          name: event.name,
+          icon: event.icon,
+          description: event.description,
+          effects: event.effects,
+          appliedAt: Date.now(),
+          duration: 30,
+        };
+        newEvents.push(activeEvent);
+        state.applyEventEffects(event.effects);
+      }
+      cooldown = EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN);
+    }
+
+    set({
+      activeEvents: newEvents,
+      eventCooldown: cooldown,
+      recruitEfficiency: calculateRecruitEfficiency(state.loyalty, newEvents),
+    });
+  },
+
+  dismissEvent: (eventId) => {
+    const state = get();
+    set({
+      activeEvents: state.activeEvents.filter((e) => e.id !== eventId),
+    });
+  },
+
   tick: (delta) => {
     const state = get();
 
     state.collectResources();
     state.processTraining(delta);
+    state.processPopulationTick(delta);
+    state.processEventTick(delta);
 
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {

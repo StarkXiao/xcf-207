@@ -982,6 +982,283 @@ body {
   flex-shrink: 0;
 }
 
+.progress-item .check {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.population-item .resource-value {
+  color: #64b5f6;
+}
+
+.loyalty-item .resource-value {
+  font-weight: 700;
+}
+
+.event-indicator {
+  animation: pulse-event 2s infinite;
+}
+
+@keyframes pulse-event {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 215, 0, 0); }
+}
+
+.pop-overview {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.pop-main-stat {
+  margin-bottom: 8px;
+}
+
+.pop-number {
+  font-size: 32px;
+  font-weight: bold;
+  color: #64b5f6;
+}
+
+.pop-max {
+  font-size: 16px;
+  color: #8a7060;
+}
+
+.pop-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pop-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pop-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s;
+}
+
+.pop-growth {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pop-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.pop-detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.detail-label {
+  color: #a08060;
+}
+
+.detail-value {
+  color: #f5e6d3;
+  font-weight: 600;
+}
+
+.loyalty-section {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.loyalty-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.loyalty-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #f5e6d3;
+}
+
+.loyalty-level {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.loyalty-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.loyalty-bar {
+  flex: 1;
+  height: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.loyalty-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.5s, background-color 0.5s;
+}
+
+.loyalty-value {
+  font-size: 14px;
+  font-weight: bold;
+  color: #f5e6d3;
+  min-width: 36px;
+  text-align: right;
+}
+
+.loyalty-effects {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.loyalty-effect-item {
+  text-align: center;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  padding: 6px;
+  font-size: 11px;
+  color: #a08060;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.loyalty-effect-item .effect-value {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.effect-value.positive {
+  color: #81c784;
+}
+
+.effect-value.negative {
+  color: #e57373;
+}
+
+.stat-sublabel {
+  font-size: 10px;
+  color: #8a7060;
+  display: block;
+  text-align: center;
+}
+
+.stat-value.low-efficiency {
+  color: #ff9800;
+}
+
+.events-section {
+  margin-bottom: 14px;
+}
+
+.event-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid #5d4037;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.event-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.event-icon {
+  font-size: 22px;
+}
+
+.event-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: bold;
+  color: #ffd700;
+}
+
+.event-timer {
+  font-size: 12px;
+  color: #ff9800;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.event-desc {
+  font-size: 12px;
+  color: #b0a090;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.event-effects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.effect-tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.effect-tag.positive {
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+}
+
+.effect-tag.negative {
+  background: rgba(229, 57, 53, 0.2);
+  color: #e57373;
+}
+
+.dismiss-btn {
+  width: auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  align-self: flex-end;
+}
+
+.pop-tips {
+  margin-top: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+}
+
 @media (max-width: 900px) {
   .main-content {
     flex-direction: column;

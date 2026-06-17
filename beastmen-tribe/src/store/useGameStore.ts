@@ -11,12 +11,24 @@ import type {
   Enemy,
   ActiveTribeEvent,
   EventEffect,
+  Expedition,
+  ExpeditionWarrior,
+  ExpeditionResult,
+  ExpeditionNotification,
+  MapEventChoice,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
 import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
 import { triggerRandomEvent } from '../data/events';
+import {
+  EXPEDITION_MAPS,
+  NODE_MARCH_TIME,
+  EXP_GAIN,
+  rollLoot,
+  getExpeditionMap,
+} from '../data/expedition';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
@@ -98,6 +110,10 @@ const createInitialState = (): GameState => ({
   activeEvents: [],
   eventCooldown: EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
   recruitEfficiency: 0.5 + (70 / 100) * 0.5,
+  activeExpedition: null,
+  expeditionNotifications: [],
+  totalExpeditions: 0,
+  expeditionWins: 0,
 });
 
 const loadSave = (): GameState => {
@@ -120,6 +136,10 @@ const loadSave = (): GameState => {
       };
       state.maxPopulation = calculateMaxPopulation(state.buildings);
       state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
+      state.activeExpedition = parsed.activeExpedition || null;
+      state.expeditionNotifications = parsed.expeditionNotifications || [];
+      state.totalExpeditions = parsed.totalExpeditions || 0;
+      state.expeditionWins = parsed.expeditionWins || 0;
       return state;
     }
   } catch (e) {
@@ -151,6 +171,13 @@ interface GameStore extends GameState {
   processPopulationTick: (delta: number) => void;
   processEventTick: (delta: number) => void;
   dismissEvent: (eventId: string) => void;
+
+  startExpedition: (mapId: string, warriorIds: string[]) => boolean;
+  resolveExpeditionEvent: (choice: MapEventChoice) => void;
+  processExpeditionTick: (delta: number) => void;
+  settleExpedition: () => void;
+  cancelExpedition: () => void;
+  dismissExpeditionNotification: (id: string) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -638,6 +665,454 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
+  startExpedition: (mapId, warriorIds) => {
+    const state = get();
+    if (state.activeExpedition) return false;
+
+    const mapConfig = getExpeditionMap(mapId);
+    if (!mapConfig) return false;
+    if (warriorIds.length < mapConfig.requiredWarriors) return false;
+
+    const selectedWarriors = warriorIds
+      .map((id) => state.warriors.find((w) => w.id === id))
+      .filter((w): w is Warrior => !!w);
+
+    if (selectedWarriors.length < mapConfig.requiredWarriors) return false;
+
+    const expeditionWarriors: ExpeditionWarrior[] = selectedWarriors.map((w) => ({
+      id: w.id,
+      type: w.type,
+      hp: w.hp,
+      maxHp: w.maxHp,
+      attack: w.attack,
+      defense: w.defense,
+      level: w.level,
+      exp: w.exp,
+      originalHp: w.hp,
+    }));
+
+    const remainingWarriors = state.warriors.filter(
+      (w) => !warriorIds.includes(w.id)
+    );
+
+    const expedition: Expedition = {
+      id: generateId(),
+      mapId,
+      mapName: mapConfig.name,
+      mapIcon: mapConfig.icon,
+      status: 'marching',
+      warriors: expeditionWarriors,
+      currentNodeIndex: 0,
+      nodes: mapConfig.nodes,
+      progress: 0,
+      currentNodeProgress: 0,
+      results: [],
+      totalLoot: {},
+      totalExp: 0,
+      totalCasualties: 0,
+      pendingEvent: null,
+      returningProgress: 0,
+      startedAt: Date.now(),
+    };
+
+    const notification: ExpeditionNotification = {
+      id: generateId(),
+      type: 'info',
+      icon: mapConfig.icon,
+      message: `远征队出发前往${mapConfig.name}！`,
+      timestamp: Date.now(),
+      duration: 5,
+    };
+
+    set({
+      warriors: remainingWarriors,
+      activeExpedition: expedition,
+      expeditionNotifications: [...state.expeditionNotifications, notification],
+    });
+
+    return true;
+  },
+
+  resolveExpeditionEvent: (choice) => {
+    const state = get();
+    const expedition = state.activeExpedition;
+    if (!expedition || expedition.status !== 'event' || !expedition.pendingEvent) return;
+
+    const node = expedition.pendingEvent;
+    const log: string[] = [];
+    let victory = false;
+    let loot: Partial<Resources> = {};
+    let casualties = 0;
+    const expGain = EXP_GAIN[node.difficulty] || 10;
+    let warriors = expedition.warriors.map((w) => ({ ...w }));
+
+    log.push(`📍 ${node.name} - ${node.description}`);
+
+    switch (choice) {
+      case 'fight': {
+        log.push(`⚔️ 远征队选择战斗！`);
+        const enemyConfig = node.enemyType ? ENEMIES[node.enemyType] : null;
+        const enemyCount = node.enemyCount || 1;
+
+        if (!enemyConfig) {
+          victory = true;
+          loot = rollLoot('combat', node.difficulty);
+          log.push(`敌人已被击退！`);
+        } else {
+          const difficultyScale = node.difficulty === 'epic' ? 1.5 : node.difficulty === 'hard' ? 1.3 : node.difficulty === 'normal' ? 1.1 : 1.0;
+
+          let enemies: { hp: number; maxHp: number; attack: number; defense: number; name: string }[] = [];
+          for (let i = 0; i < enemyCount; i++) {
+            enemies.push({
+              hp: Math.floor(enemyConfig.hp * difficultyScale),
+              maxHp: Math.floor(enemyConfig.hp * difficultyScale),
+              attack: Math.floor(enemyConfig.attack * difficultyScale),
+              defense: Math.floor(enemyConfig.defense * difficultyScale),
+              name: enemyConfig.name,
+            });
+          }
+
+          log.push(`遭遇 ${enemyCount}x ${enemyConfig.name}！`);
+
+          let round = 0;
+          while (warriors.length > 0 && enemies.length > 0 && round < 15) {
+            round++;
+            for (const warrior of warriors) {
+              if (enemies.length === 0) break;
+              const target = enemies[0];
+              const damage = Math.max(1, warrior.attack - target.defense / 2);
+              target.hp -= damage;
+              if (target.hp <= 0) {
+                enemies.shift();
+                log.push(`${WARRIORS[warrior.type].name} 击败了 ${enemyConfig.name}！`);
+              }
+            }
+
+            for (const enemy of enemies) {
+              if (warriors.length === 0) break;
+              const target = warriors[Math.floor(Math.random() * warriors.length)];
+              const damage = Math.max(1, enemy.attack - target.defense / 2);
+              target.hp -= damage;
+              if (target.hp <= 0) {
+                warriors = warriors.filter((w) => w.id !== target.id);
+                casualties++;
+                log.push(`☠️ ${WARRIORS[target.type].name} 阵亡！`);
+              }
+            }
+          }
+
+          victory = enemies.length === 0 && warriors.length > 0;
+
+          if (victory) {
+            loot = rollLoot(node.type === 'boss' ? 'combat' : node.type, node.difficulty);
+            log.push(`🏆 战斗胜利！`);
+          } else {
+            log.push(`💔 战斗失败...`);
+          }
+        }
+        break;
+      }
+
+      case 'flee': {
+        const fleeChance = node.type === 'ambush' ? 0.3 : node.type === 'trap' ? 0.5 : 0.7;
+        if (Math.random() < fleeChance) {
+          victory = true;
+          log.push(`🏃 成功撤退！`);
+        } else {
+          const damagePercent = node.type === 'trap' ? 0.3 : 0.15;
+          warriors = warriors.map((w) => ({
+            ...w,
+            hp: Math.max(1, w.hp - w.maxHp * damagePercent),
+          }));
+          const dead = warriors.filter((w) => w.hp <= 0);
+          casualties += dead.length;
+          warriors = warriors.filter((w) => w.hp > 0);
+          log.push(`🏃 撤退失败！受到${dead.length}人伤亡`);
+        }
+        break;
+      }
+
+      case 'negotiate': {
+        const successChance = 0.5;
+        if (Math.random() < successChance) {
+          victory = true;
+          loot = rollLoot('treasure', node.difficulty);
+          log.push(`🤝 谈判成功！获得额外奖励`);
+        } else {
+          victory = false;
+          log.push(`🤝 谈判破裂！`);
+          const damagePercent = 0.1;
+          warriors = warriors.map((w) => ({
+            ...w,
+            hp: Math.max(1, w.hp - w.maxHp * damagePercent),
+          }));
+          const dead = warriors.filter((w) => w.hp <= 0);
+          casualties += dead.length;
+          warriors = warriors.filter((w) => w.hp > 0);
+        }
+        break;
+      }
+
+      case 'explore': {
+        const trapChance = node.type === 'trap' ? 0.6 : node.type === 'treasure' ? 0.15 : 0.3;
+        if (Math.random() < trapChance) {
+          victory = false;
+          const damagePercent = node.type === 'trap' ? 0.25 : 0.1;
+          warriors = warriors.map((w) => ({
+            ...w,
+            hp: Math.max(1, w.hp - w.maxHp * damagePercent),
+          }));
+          const dead = warriors.filter((w) => w.hp <= 0);
+          casualties += dead.length;
+          warriors = warriors.filter((w) => w.hp > 0);
+          log.push(`⚠️ 探索触发陷阱！${dead.length}人伤亡`);
+        } else {
+          victory = true;
+          loot = rollLoot('treasure', node.difficulty);
+          log.push(`🔍 探索成功！发现宝藏！`);
+        }
+        break;
+      }
+
+      case 'pray': {
+        victory = true;
+        const healPercent = 0.3;
+        warriors = warriors.map((w) => ({
+          ...w,
+          hp: Math.min(w.maxHp, w.hp + w.maxHp * healPercent),
+        }));
+        loot = rollLoot('shrine', node.difficulty);
+        log.push(`🙏 祈祷生效！战士恢复30%生命值`);
+        break;
+      }
+
+      case 'rest': {
+        victory = true;
+        const restHealPercent = 0.4;
+        warriors = warriors.map((w) => ({
+          ...w,
+          hp: Math.min(w.maxHp, w.hp + w.maxHp * restHealPercent),
+        }));
+        log.push(`💤 休息成功！战士恢复40%生命值`);
+        break;
+      }
+    }
+
+    if (warriors.length === 0) {
+      victory = false;
+      log.push(`💀 远征队全军覆没...`);
+    }
+
+    const newTotalLoot: Partial<Resources> = { ...expedition.totalLoot };
+    for (const [key, amount] of Object.entries(loot)) {
+      newTotalLoot[key as keyof Resources] = (newTotalLoot[key as keyof Resources] || 0) + (amount as number);
+    }
+
+    const result: ExpeditionResult = {
+      nodeId: node.id,
+      nodeName: node.name,
+      type: node.type,
+      victory,
+      loot,
+      casualties,
+      log,
+    };
+
+    const isLastNode = expedition.currentNodeIndex >= expedition.nodes.length - 1;
+    const newStatus = warriors.length === 0
+      ? 'returning'
+      : isLastNode && victory
+        ? 'returning'
+        : 'marching';
+
+    const notifType = victory ? 'success' : 'danger';
+    const notification: ExpeditionNotification = {
+      id: generateId(),
+      type: notifType,
+      icon: victory ? '🏆' : '💀',
+      message: victory
+        ? `${node.name} — 胜利！${casualties > 0 ? `伤亡${casualties}人` : ''}`
+        : `${node.name} — 失败...伤亡${casualties}人`,
+      timestamp: Date.now(),
+      duration: 5,
+    };
+
+    set({
+      activeExpedition: {
+        ...expedition,
+        status: newStatus,
+        warriors,
+        pendingEvent: null,
+        currentNodeIndex: newStatus === 'marching' ? expedition.currentNodeIndex + 1 : expedition.currentNodeIndex,
+        currentNodeProgress: 0,
+        results: [...expedition.results, result],
+        totalLoot: newTotalLoot,
+        totalExp: expedition.totalExp + (victory ? expGain : 0),
+        totalCasualties: expedition.totalCasualties + casualties,
+        returningProgress: newStatus === 'returning' ? 0 : 0,
+      },
+      expeditionNotifications: [...state.expeditionNotifications, notification],
+    });
+  },
+
+  processExpeditionTick: (delta) => {
+    const state = get();
+    const expedition = state.activeExpedition;
+    if (!expedition) return;
+
+    if (expedition.status === 'marching') {
+      const currentNode = expedition.nodes[expedition.currentNodeIndex];
+      if (!currentNode) {
+        set({
+          activeExpedition: { ...expedition, status: 'returning', returningProgress: 0 },
+        });
+        return;
+      }
+
+      const marchTime = NODE_MARCH_TIME[currentNode.difficulty] || 10;
+      const newProgress = expedition.currentNodeProgress + delta;
+      const progressPercent = Math.min(1, newProgress / marchTime);
+
+      if (newProgress >= marchTime) {
+        if (currentNode.type === 'start') {
+          set({
+            activeExpedition: {
+              ...expedition,
+              currentNodeIndex: expedition.currentNodeIndex + 1,
+              currentNodeProgress: 0,
+            },
+          });
+        } else {
+          set({
+            activeExpedition: {
+              ...expedition,
+              status: 'event',
+              pendingEvent: currentNode,
+              currentNodeProgress: marchTime,
+              progress: progressPercent,
+            },
+          });
+        }
+      } else {
+        set({
+          activeExpedition: {
+            ...expedition,
+            currentNodeProgress: newProgress,
+            progress: progressPercent,
+          },
+        });
+      }
+    } else if (expedition.status === 'returning') {
+      const returnTime = 15;
+      const newReturnProgress = expedition.returningProgress + delta;
+
+      if (newReturnProgress >= returnTime) {
+        set({
+          activeExpedition: { ...expedition, status: 'completed' },
+        });
+      } else {
+        set({
+          activeExpedition: {
+            ...expedition,
+            returningProgress: newReturnProgress,
+          },
+        });
+      }
+    }
+
+    const notifs = state.expeditionNotifications
+      .map((n) => ({ ...n, duration: n.duration - delta }))
+      .filter((n) => n.duration > 0);
+    set({ expeditionNotifications: notifs });
+  },
+
+  settleExpedition: () => {
+    const state = get();
+    const expedition = state.activeExpedition;
+    if (!expedition || expedition.status !== 'completed') return;
+
+    const returningWarriors = expedition.warriors.map((ew) => ({
+      id: ew.id,
+      type: ew.type,
+      hp: Math.floor(ew.hp),
+      maxHp: ew.maxHp,
+      attack: ew.attack,
+      defense: ew.defense,
+      level: ew.level,
+      exp: ew.exp,
+    }));
+
+    const survivedCount = expedition.warriors.filter((w) => w.hp > 0).length;
+    const totalCount = expedition.warriors.length + expedition.totalCasualties;
+    const isVictory = survivedCount > 0 && expedition.results.some((r) => r.victory);
+
+    state.addResources(expedition.totalLoot);
+
+    const mapConfig = getExpeditionMap(expedition.mapId);
+    if (mapConfig?.bonusLoot && isVictory) {
+      state.addResources(mapConfig.bonusLoot);
+    }
+
+    const notification: ExpeditionNotification = {
+      id: generateId(),
+      type: isVictory ? 'success' : 'warning',
+      icon: isVictory ? '🏠' : '⚔️',
+      message: isVictory
+        ? `远征队凯旋！${survivedCount}/${totalCount}人生还`
+        : `远征队惨败归营...仅${survivedCount}人生还`,
+      timestamp: Date.now(),
+      duration: 8,
+    };
+
+    set({
+      warriors: [...state.warriors, ...returningWarriors],
+      activeExpedition: null,
+      totalExpeditions: state.totalExpeditions + 1,
+      expeditionWins: state.expeditionWins + (isVictory ? 1 : 0),
+      loyalty: Math.min(100, state.loyalty + (isVictory ? 3 : -5)),
+      expeditionNotifications: [...state.expeditionNotifications, notification],
+    });
+  },
+
+  cancelExpedition: () => {
+    const state = get();
+    const expedition = state.activeExpedition;
+    if (!expedition) return;
+
+    const returningWarriors = expedition.warriors.map((ew) => ({
+      id: ew.id,
+      type: ew.type,
+      hp: Math.floor(ew.hp),
+      maxHp: ew.maxHp,
+      attack: ew.attack,
+      defense: ew.defense,
+      level: ew.level,
+      exp: ew.exp,
+    }));
+
+    const notification: ExpeditionNotification = {
+      id: generateId(),
+      type: 'warning',
+      icon: '⚠️',
+      message: '远征被取消，战士返回营地',
+      timestamp: Date.now(),
+      duration: 5,
+    };
+
+    set({
+      warriors: [...state.warriors, ...returningWarriors],
+      activeExpedition: null,
+      expeditionNotifications: [...state.expeditionNotifications, notification],
+    });
+  },
+
+  dismissExpeditionNotification: (id) => {
+    const state = get();
+    set({
+      expeditionNotifications: state.expeditionNotifications.filter((n) => n.id !== id),
+    });
+  },
+
   tick: (delta) => {
     const state = get();
 
@@ -645,6 +1120,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processTraining(delta);
     state.processPopulationTick(delta);
     state.processEventTick(delta);
+    state.processExpeditionTick(delta);
 
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {

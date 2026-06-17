@@ -7,15 +7,17 @@ import { BattlePanel } from './components/BattlePanel';
 import { TradePanel } from './components/TradePanel';
 import { SavePanel } from './components/SavePanel';
 import { PopulationPanel } from './components/PopulationPanel';
+import { ExpeditionPanel } from './components/ExpeditionPanel';
 import './App.css';
 
-type TabType = 'population' | 'building' | 'warrior' | 'battle' | 'trade' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'battle' | 'expedition' | 'trade' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'population', label: '人口', icon: '👥' },
   { id: 'building', label: '建设', icon: '🏗️' },
   { id: 'warrior', label: '训练', icon: '⚔️' },
   { id: 'battle', label: '战斗', icon: '🛡️' },
+  { id: 'expedition', label: '远征', icon: '🗡️' },
   { id: 'trade', label: '交易', icon: '🏪' },
   { id: 'save', label: '设置', icon: '💾' },
 ];
@@ -65,6 +67,7 @@ function App() {
             {activeTab === 'building' && <BuildingPanel gameRef={gameRef} />}
             {activeTab === 'warrior' && <WarriorPanel />}
             {activeTab === 'battle' && <BattlePanel />}
+            {activeTab === 'expedition' && <ExpeditionPanel />}
             {activeTab === 'trade' && <TradePanel />}
             {activeTab === 'save' && <SavePanel />}
           </div>

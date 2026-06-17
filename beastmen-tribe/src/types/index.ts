@@ -157,6 +157,101 @@ export interface ActiveTribeEvent {
   duration: number;
 }
 
+export type ExpeditionDifficulty = 'easy' | 'normal' | 'hard' | 'epic';
+
+export type MapNodeType = 'start' | 'combat' | 'treasure' | 'trap' | 'rest' | 'boss' | 'shrine' | 'ambush';
+
+export type MapEventChoice = 'fight' | 'flee' | 'negotiate' | 'explore' | 'pray' | 'rest';
+
+export interface ExpeditionMapNode {
+  id: string;
+  type: MapNodeType;
+  name: string;
+  icon: string;
+  description: string;
+  position: number;
+  choices?: MapEventChoice[];
+  enemyType?: EnemyType;
+  enemyCount?: number;
+  difficulty: ExpeditionDifficulty;
+}
+
+export interface ExpeditionMapConfig {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  difficulty: ExpeditionDifficulty;
+  requiredWarriors: number;
+  nodes: ExpeditionMapNode[];
+  bonusLoot?: Partial<Resources>;
+}
+
+export interface ExpeditionWarrior {
+  id: string;
+  type: WarriorType;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  level: number;
+  exp: number;
+  originalHp: number;
+}
+
+export type ExpeditionStatus =
+  | 'idle'
+  | 'forming'
+  | 'marching'
+  | 'event'
+  | 'settling'
+  | 'returning'
+  | 'completed';
+
+export interface ExpeditionLoot {
+  resources: Partial<Resources>;
+  exp: number;
+}
+
+export interface ExpeditionResult {
+  nodeId: string;
+  nodeName: string;
+  type: MapNodeType;
+  victory: boolean;
+  loot: Partial<Resources>;
+  casualties: number;
+  log: string[];
+}
+
+export interface Expedition {
+  id: string;
+  mapId: string;
+  mapName: string;
+  mapIcon: string;
+  status: ExpeditionStatus;
+  warriors: ExpeditionWarrior[];
+  currentNodeIndex: number;
+  nodes: ExpeditionMapNode[];
+  progress: number;
+  currentNodeProgress: number;
+  results: ExpeditionResult[];
+  totalLoot: Partial<Resources>;
+  totalExp: number;
+  totalCasualties: number;
+  pendingEvent: ExpeditionMapNode | null;
+  returningProgress: number;
+  startedAt: number;
+}
+
+export interface ExpeditionNotification {
+  id: string;
+  type: 'info' | 'success' | 'warning' | 'danger';
+  icon: string;
+  message: string;
+  timestamp: number;
+  duration: number;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -179,4 +274,8 @@ export interface GameState {
   activeEvents: ActiveTribeEvent[];
   eventCooldown: number;
   recruitEfficiency: number;
+  activeExpedition: Expedition | null;
+  expeditionNotifications: ExpeditionNotification[];
+  totalExpeditions: number;
+  expeditionWins: number;
 }

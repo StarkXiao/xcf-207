@@ -20,6 +20,7 @@ export type BuildingType =
   | 'hut'
   | 'warehouse'
   | 'caravanserai'
+  | 'smugglers_den'
   | 'totem_altar'
   | 'totem_pole'
   | 'shrine';
@@ -1189,4 +1190,7 @@ export interface GameState {
   caravanCooldown: number;
   activeCaravanCount: number;
   maxCaravans: number;
+  wantedLevel: number;
+  lastBlackMarketRefresh: number;
+  blackMarketRefreshInterval: number;
 }

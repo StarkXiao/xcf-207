@@ -15,7 +15,7 @@ export function TradePanel() {
   const blackMarketOffers = useGameStore((s) => s.blackMarketOffers);
   const acceptBlackMarketOffer = useGameStore((s) => s.acceptBlackMarketOffer);
   const refreshBlackMarket = useGameStore((s) => s.refreshBlackMarket);
-  const negotiation = useGameStore((s) => s.negotiation);
+  const currentNegotiation = useGameStore((s) => s.currentNegotiation);
   const startNegotiation = useGameStore((s) => s.startNegotiation);
   const attemptNegotiation = useGameStore((s) => s.attemptNegotiation);
   const cancelNegotiation = useGameStore((s) => s.cancelNegotiation);
@@ -53,22 +53,21 @@ export function TradePanel() {
     }
   };
 
-  const calculatePrice = (basePrice: number, tradeType: string, resource: string, priceModifier: number) => {
+  const calculatePrice = (baseAmount: number, resource: string, modifier: number) => {
     const fluctuation = priceFluctuations[resource as keyof Resources]?.currentMultiplier || 1;
-    const modifier = priceModifier || 1;
-    if (tradeType === 'buy') {
-      return Math.ceil(basePrice * fluctuation * modifier);
-    }
-    return Math.ceil(basePrice * fluctuation * modifier);
+    return Math.ceil(baseAmount * fluctuation * modifier);
   };
 
   const getNegotiationMoodEmoji = (mood: number) => {
-    if (mood >= 70) return '😊';
-    if (mood >= 40) return '😐';
+    const moodPercent = mood * 100;
+    if (moodPercent >= 70) return '😊';
+    if (moodPercent >= 40) return '😐';
     return '😠';
   };
 
   const refreshCooldown = Math.max(0, 60 - Math.floor((Date.now() - lastBlackMarketRefresh) / 1000));
+
+  const isNegotiating = currentNegotiation !== null;
 
   return (
     <div className="panel trade-panel">
@@ -100,7 +99,8 @@ export function TradePanel() {
                 const info = RESOURCE_INFO[resource];
                 const fluct = priceFluctuations[resource];
                 if (!fluct) return null;
-                const priceChange = ((fluct.currentMultiplier - 1) * 100).toFixed(1);
+                const priceChangeNum = (fluct.currentMultiplier - 1) * 100;
+                const priceChangeStr = priceChangeNum.toFixed(1);
                 return (
                   <div key={resource} className="price-item">
                     <span className="price-icon">{info.icon}</span>
@@ -110,7 +110,7 @@ export function TradePanel() {
                       className="price-trend"
                       style={{ color: getTrendColor(fluct.trend) }}
                     >
-                      {getTrendIcon(fluct.trend)} {priceChange > 0 ? '+' : ''}{priceChange}%
+                      {getTrendIcon(fluct.trend)} {priceChangeNum > 0 ? '+' : ''}{priceChangeStr}%
                     </span>
                   </div>
                 );
@@ -126,22 +126,22 @@ export function TradePanel() {
             🔄 刷新交易 (🪙 20)
           </button>
 
-          {negotiation.isActive && (
+          {isNegotiating && currentNegotiation && (
             <div className="negotiation-panel">
               <div className="negotiation-header">
                 <span className="negotiation-icon">🤝</span>
                 <div className="negotiation-info">
                   <h5>议价中...</h5>
                   <div className="negotiation-mood">
-                    对方心情: {getNegotiationMoodEmoji(negotiation.partnerMood)} ({negotiation.partnerMood}/100)
+                    对方心情: {getNegotiationMoodEmoji(currentNegotiation.opponentMood)} ({Math.round(currentNegotiation.opponentMood * 100)}/100)
                   </div>
                   <div className="negotiation-attempts">
-                    剩余尝试次数: {negotiation.attemptsLeft}
+                    剩余尝试次数: {currentNegotiation.maxAttempts - currentNegotiation.attempts}
                   </div>
                   <div className="negotiation-current">
-                    当前价格系数: ×{negotiation.currentModifier.toFixed(2)}
-                    {negotiation.currentModifier < 1 && ' (优惠!)'}
-                    {negotiation.currentModifier > 1 && ' (加价...)'}
+                    当前价格系数: ×{currentNegotiation.currentModifier.toFixed(2)}
+                    {currentNegotiation.currentModifier < 1 && ' (优惠!)'}
+                    {currentNegotiation.currentModifier > 1 && ' (加价...)'}
                   </div>
                 </div>
               </div>
@@ -149,7 +149,7 @@ export function TradePanel() {
                 <button 
                   className="btn btn-danger"
                   onClick={() => attemptNegotiation(true)}
-                  disabled={negotiation.attemptsLeft <= 0}
+                  disabled={currentNegotiation.attempts >= currentNegotiation.maxAttempts}
                 >
                   🎯 激进议价
                   <div className="btn-hint">高风险高回报</div>
@@ -157,7 +157,7 @@ export function TradePanel() {
                 <button 
                   className="btn btn-secondary"
                   onClick={() => attemptNegotiation(false)}
-                  disabled={negotiation.attemptsLeft <= 0}
+                  disabled={currentNegotiation.attempts >= currentNegotiation.maxAttempts}
                 >
                   🌱 温和议价
                   <div className="btn-hint">更可能成功但幅度小</div>
@@ -174,25 +174,26 @@ export function TradePanel() {
 
           <div className="trade-list">
             {trades.map((trade) => {
-              const priceModifier = negotiation.isActive && negotiation.tradeId === trade.id 
-                ? negotiation.currentModifier 
+              const negotiationModifier = isNegotiating && currentNegotiation?.tradeId === trade.id 
+                ? currentNegotiation.currentModifier 
                 : 1;
-              const giveAmount = calculatePrice(trade.give.amount, trade.type, trade.give.resource, priceModifier);
+              const giveAmount = calculatePrice(trade.give.amount, trade.give.resource, negotiationModifier);
               const canTrade =
                 trade.stock > 0 &&
                 resources[trade.give.resource as keyof Resources] >= giveAmount;
-              const isNegotiating = negotiation.isActive && negotiation.tradeId === trade.id;
+              const isThisNegotiating = isNegotiating && currentNegotiation?.tradeId === trade.id;
+              const hasBonus = trade.currentPriceMultiplier !== 1;
 
               return (
                 <div
                   key={trade.id}
-                  className={`trade-card ${canTrade ? '' : 'disabled'} ${isNegotiating ? 'negotiating' : ''}`}
+                  className={`trade-card ${canTrade ? '' : 'disabled'} ${isThisNegotiating ? 'negotiating' : ''}`}
                 >
                   <div className="trade-type">
                     {trade.type === 'buy' ? '📥 收购' : '📤 出售'}
-                    {trade.priceModifier !== 1 && (
-                      <span className={`trade-bonus ${trade.priceModifier > 1 ? 'positive' : 'negative'}`}>
-                        {trade.priceModifier > 1 ? '+' : ''}{Math.round((trade.priceModifier - 1) * 100)}%
+                    {hasBonus && (
+                      <span className={`trade-bonus ${trade.currentPriceMultiplier > 1 ? 'positive' : 'negative'}`}>
+                        {trade.currentPriceMultiplier > 1 ? '+' : ''}{Math.round((trade.currentPriceMultiplier - 1) * 100)}%
                       </span>
                     )}
                   </div>
@@ -242,7 +243,7 @@ export function TradePanel() {
                     >
                       交易
                     </button>
-                    {!negotiation.isActive && (
+                    {!isNegotiating && (
                       <button
                         className="btn btn-secondary btn-small"
                         onClick={() => startNegotiation(trade.id)}
@@ -293,12 +294,15 @@ export function TradePanel() {
 
           <div className="trade-list">
             {blackMarketOffers.map((offer) => {
+              const tradeOffer = offer.tradeOffer;
               const canTrade = 
-                resources[offer.giveResource as keyof Resources] >= offer.giveAmount &&
-                offer.stock > 0;
-              const ratio = (offer.receiveAmount / offer.giveAmount).toFixed(2);
-              const isGoodDeal = offer.ratioMultiplier > 1.4;
-              const isBadDeal = offer.ratioMultiplier < 0.7;
+                resources[tradeOffer.give.resource as keyof Resources] >= tradeOffer.give.amount &&
+                tradeOffer.stock > 0;
+              const ratio = (tradeOffer.receive.amount / tradeOffer.give.amount).toFixed(2);
+              const ratioMultiplier = tradeOffer.receive.amount / tradeOffer.give.amount;
+              const isGoodDeal = ratioMultiplier > 1.4;
+              const isBadDeal = ratioMultiplier < 0.7;
+              const isBuy = tradeOffer.type === 'buy';
 
               return (
                 <div
@@ -307,7 +311,7 @@ export function TradePanel() {
                   onClick={() => canTrade && acceptBlackMarketOffer(offer.id)}
                 >
                   <div className="trade-type">
-                    {offer.isBuy ? '📥 收购' : '📤 出售'}
+                    {isBuy ? '📥 收购' : '📤 出售'}
                     <span className="risk-badge">
                       风险: {'🔥'.repeat(offer.riskLevel)}
                     </span>
@@ -315,24 +319,24 @@ export function TradePanel() {
                   <div className="trade-exchange">
                     <div className="trade-side">
                       <span className="trade-icon">
-                        {RESOURCE_INFO[offer.giveResource as keyof Resources].icon}
+                        {RESOURCE_INFO[tradeOffer.give.resource].icon}
                       </span>
                       <span
                         className={`trade-amount ${
-                          resources[offer.giveResource as keyof Resources] >= offer.giveAmount
+                          resources[tradeOffer.give.resource as keyof Resources] >= tradeOffer.give.amount
                             ? ''
                             : 'insufficient'
                         }`}
                       >
-                        {offer.giveAmount}
+                        {tradeOffer.give.amount}
                       </span>
                     </div>
                     <span className="trade-arrow">→</span>
                     <div className="trade-side">
                       <span className="trade-icon">
-                        {RESOURCE_INFO[offer.receiveResource as keyof Resources].icon}
+                        {RESOURCE_INFO[tradeOffer.receive.resource].icon}
                       </span>
-                      <span className="trade-amount gain">{offer.receiveAmount}</span>
+                      <span className="trade-amount gain">{tradeOffer.receive.amount}</span>
                     </div>
                   </div>
                   <div className="trade-ratio">
@@ -341,7 +345,7 @@ export function TradePanel() {
                     {isBadDeal && <span className="bad-tag">风险高</span>}
                   </div>
                   <div className="trade-stock">
-                    库存：{offer.stock}
+                    库存：{tradeOffer.stock}
                   </div>
                 </div>
               );

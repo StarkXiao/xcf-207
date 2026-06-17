@@ -5,7 +5,6 @@ import type {
   RouteDifficulty,
   ResourceType,
   PriceFluctuation,
-  FactionType,
 } from '../types';
 
 export const RISK_EVENTS: Record<RiskEventType, RiskEvent> = {
@@ -245,7 +244,7 @@ export const getRiskChance = (
 
 export const calculateRoutePriceBonus = (
   route: TradeRoute,
-  priceFluctuations: Record<ResourceType, PriceFluctuation>,
+  _priceFluctuations: Record<ResourceType, PriceFluctuation>,
   factions: any
 ): number => {
   let bonus = route.priceBonus;
@@ -262,7 +261,7 @@ export const calculateRoutePriceBonus = (
 
 export const generateBlackMarketOffer = (
   priceFluctuations: Record<ResourceType, PriceFluctuation>,
-  day: number
+  _day: number
 ): any => {
   const resources: ResourceType[] = ['food', 'wood', 'stone', 'gold', 'iron'];
   const giveResource = resources[Math.floor(Math.random() * resources.length)];

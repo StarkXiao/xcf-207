@@ -9,7 +9,14 @@ import {
   DIFFICULTY_NAMES,
   NODE_MARCH_TIME,
 } from '../data/expedition';
-import type { MapEventChoice } from '../types';
+import type {
+  MapEventChoice,
+  Expedition,
+  ExpeditionMapNode,
+  ExpeditionWarrior,
+  ExpeditionResult,
+  ExpeditionNotification,
+} from '../types';
 
 const CHOICE_LABELS: Record<MapEventChoice, { label: string; icon: string }> = {
   fight: { label: '战斗', icon: '⚔️' },
@@ -234,7 +241,7 @@ export function ExpeditionPanel() {
   );
 }
 
-function ExpeditionStatusBar({ expedition }: { expedition: typeof useGameStore extends (s: infer S) => any ? NonNullable<S['activeExpedition']> : never }) {
+function ExpeditionStatusBar({ expedition }: { expedition: Expedition }) {
   const statusMap: Record<string, { label: string; color: string }> = {
     marching: { label: '行军中', color: '#64b5f6' },
     event: { label: '遭遇事件', color: '#ff9800' },
@@ -260,7 +267,7 @@ function ExpeditionStatusBar({ expedition }: { expedition: typeof useGameStore e
   );
 }
 
-function MarchingView({ expedition }: { expedition: any }) {
+function MarchingView({ expedition }: { expedition: Expedition }) {
   const currentNode = expedition.nodes[expedition.currentNodeIndex];
   const marchTime = currentNode ? NODE_MARCH_TIME[currentNode.difficulty] || 10 : 10;
   const progressPercent = Math.min(100, (expedition.currentNodeProgress / marchTime) * 100);
@@ -268,7 +275,7 @@ function MarchingView({ expedition }: { expedition: any }) {
   return (
     <div className="marching-view">
       <div className="march-route">
-        {expedition.nodes.map((node: any, i: number) => (
+        {expedition.nodes.map((node, i) => (
           <div
             key={node.id}
             className={`route-node ${
@@ -304,7 +311,7 @@ function MarchingView({ expedition }: { expedition: any }) {
   );
 }
 
-function EventView({ node, warriors, onChoice }: { node: any; warriors: any[]; onChoice: (choice: MapEventChoice) => void }) {
+function EventView({ node, warriors, onChoice }: { node: ExpeditionMapNode; warriors: ExpeditionWarrior[]; onChoice: (choice: MapEventChoice) => void }) {
   const diffColor = DIFFICULTY_COLORS[node.difficulty] || '#999';
 
   return (
@@ -349,9 +356,9 @@ function EventView({ node, warriors, onChoice }: { node: any; warriors: any[]; o
   );
 }
 
-function ReturningView({ expedition }: { expedition: any }) {
+function ReturningView({ expedition }: { expedition: Expedition }) {
   const returnProgress = Math.min(100, (expedition.returningProgress / 15) * 100);
-  const isWiped = expedition.warriors.every((w: any) => w.hp <= 0);
+  const isWiped = expedition.warriors.every((w) => w.hp <= 0);
 
   return (
     <div className="returning-view">
@@ -389,10 +396,10 @@ function ReturningView({ expedition }: { expedition: any }) {
   );
 }
 
-function CompletedView({ expedition, onSettle, showLogIndex, onToggleLog }: { expedition: any; onSettle: () => void; showLogIndex: number | null; onToggleLog: (i: number | null) => void }) {
-  const survivedCount = expedition.warriors.filter((w: any) => w.hp > 0).length;
+function CompletedView({ expedition, onSettle, showLogIndex, onToggleLog }: { expedition: Expedition; onSettle: () => void; showLogIndex: number | null; onToggleLog: (i: number | null) => void }) {
+  const survivedCount = expedition.warriors.filter((w) => w.hp > 0).length;
   const totalCount = expedition.warriors.length + expedition.totalCasualties;
-  const isVictory = survivedCount > 0 && expedition.results.some((r: any) => r.victory);
+  const isVictory = survivedCount > 0 && expedition.results.some((r) => r.victory);
 
   return (
     <div className="completed-view">
@@ -440,7 +447,7 @@ function CompletedView({ expedition, onSettle, showLogIndex, onToggleLog }: { ex
   );
 }
 
-function ResultsList({ results, showLogIndex, onToggleLog }: { results: any[]; showLogIndex: number | null; onToggleLog: (i: number | null) => void }) {
+function ResultsList({ results, showLogIndex, onToggleLog }: { results: ExpeditionResult[]; showLogIndex: number | null; onToggleLog: (i: number | null) => void }) {
   return (
     <div className="results-list">
       <div className="queue-title">战报记录</div>
@@ -454,7 +461,7 @@ function ResultsList({ results, showLogIndex, onToggleLog }: { results: any[]; s
           </div>
           {showLogIndex === i && (
             <div className="battle-log">
-              {result.log.map((line: string, li: number) => (
+              {result.log.map((line, li) => (
                 <div key={li} className="log-line">{line}</div>
               ))}
               {Object.keys(result.loot).length > 0 && (
@@ -475,12 +482,12 @@ function ResultsList({ results, showLogIndex, onToggleLog }: { results: any[]; s
   );
 }
 
-function SquadPreview({ warriors, showDamage }: { warriors: any[]; showDamage?: boolean }) {
+function SquadPreview({ warriors, showDamage }: { warriors: ExpeditionWarrior[]; showDamage?: boolean }) {
   return (
     <div className="squad-preview">
       <div className="queue-title">远征队</div>
       <div className="squad-grid">
-        {warriors.map((w: any) => {
+        {warriors.map((w) => {
           const config = WARRIORS[w.type];
           const hpPercent = (w.hp / w.maxHp) * 100;
           const isDead = w.hp <= 0;
@@ -508,7 +515,7 @@ function SquadPreview({ warriors, showDamage }: { warriors: any[]; showDamage?: 
   );
 }
 
-function NotificationStack({ notifications, onDismiss }: { notifications: any[]; onDismiss: (id: string) => void }) {
+function NotificationStack({ notifications, onDismiss }: { notifications: ExpeditionNotification[]; onDismiss: (id: string) => void }) {
   if (notifications.length === 0) return null;
 
   return (

@@ -487,12 +487,25 @@ export type EventEffectType =
   | 'recruit_boost'
   | 'plague'
   | 'festival'
-  | 'migration';
+  | 'migration'
+  | 'unlock_panel';
 
 export interface EventEffect {
   type: EventEffectType;
   value: number;
   resource?: ResourceType;
+  panelId?: string;
+}
+
+export interface MilestoneStoryEvent {
+  id: string;
+  milestoneId: string;
+  name: string;
+  description: string;
+  icon: string;
+  effects: EventEffect[];
+  storyText: string;
+  autoApply: boolean;
 }
 
 export interface TribeEventConfig {
@@ -1476,5 +1489,6 @@ export interface MilestoneState {
   dismissedRedDots: string[];
   pendingMilestonePopup: MilestoneConfig | null;
   eventMilestoneTriggers: string[];
+  completedStoryEvents: string[];
   lastTownhallLevel: number;
 }

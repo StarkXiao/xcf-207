@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getRequirementDescription, getBuildTime, getUpgradeTime } from '../data/buildings';
+import { MILESTONES } from '../data/milestones';
 import { RESOURCE_INFO } from '../data/trades';
 import type { BuildingType, Resources, BuildQueueItem, BuildingUpgradeHint, ProductionEstimate } from '../types';
 
@@ -24,7 +25,6 @@ export function BuildingPanel({ gameRef }: Props) {
   const getUnlockableBuildings = useGameStore((s) => s.getUnlockableBuildings);
   const checkBuildingRequirements = useGameStore((s) => s.checkBuildingRequirements);
   const getBuildingHasRedDot = useGameStore((s) => s.getBuildingHasRedDot);
-  const getCurrentMilestone = useGameStore((s) => s.getCurrentMilestone);
   const dismissRedDot = useGameStore((s) => s.dismissRedDot);
   const getBuildingsToUnlockNext = useGameStore((s) => s.getBuildingsToUnlockNext);
   const getNextMilestone = useGameStore((s) => s.getNextMilestone);
@@ -33,7 +33,6 @@ export function BuildingPanel({ gameRef }: Props) {
   const upgradeHints = getUpgradeHints();
   const unlockableBuildings = getUnlockableBuildings();
   const affordableHints = upgradeHints.filter((h) => h.canAfford);
-  const currentMilestone = getCurrentMilestone();
   const nextBuildings = getBuildingsToUnlockNext();
   const nextMilestone = getNextMilestone();
 
@@ -41,8 +40,12 @@ export function BuildingPanel({ gameRef }: Props) {
     const game = gameRef.current as { scene?: { getScene: (name: string) => { events: { emit: (event: string, data: unknown) => void } } } };
     const scene = game.scene?.getScene('VillageScene');
     if (scene) {
-      if (getBuildingHasRedDot(type) && currentMilestone) {
-        dismissRedDot(currentMilestone.id, 'building', type);
+      if (getBuildingHasRedDot(type)) {
+        for (const m of MILESTONES) {
+          if (m.redDots.some((rd) => rd.type === 'building' && rd.target === type)) {
+            dismissRedDot(m.id, 'building', type);
+          }
+        }
       }
       selectBuilding(null);
       scene.events.emit('startPlacing', type);

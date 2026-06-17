@@ -21,6 +21,7 @@ import { CaravanPanel } from './components/CaravanPanel';
 import { MilestonePanel } from './components/MilestonePanel';
 import { MilestonePopup } from './components/MilestonePopup';
 import { useGameStore } from './store/useGameStore';
+import { MILESTONES } from './data/milestones';
 import './App.css';
 
 type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'nightRaid' | 'totem' | 'task' | 'trade' | 'caravan' | 'storage' | 'diplomacy' | 'government' | 'milestone' | 'save';
@@ -55,10 +56,21 @@ function App() {
   const claimMilestonePopup = useGameStore((s) => s.claimMilestonePopup);
   const closeMilestonePopup = useGameStore((s) => s.closeMilestonePopup);
   const getPendingRedDots = useGameStore((s) => s.getPendingRedDots);
-  const getCurrentMilestone = useGameStore((s) => s.getCurrentMilestone);
+  const getUnlockedPanels = useGameStore((s) => s.getUnlockedPanels);
 
   const pendingDots = getPendingRedDots();
-  const currentMilestone = getCurrentMilestone();
+  const unlockedPanels = getUnlockedPanels();
+
+  const visibleTabs = TABS.filter((tab) => {
+    if (tab.id === 'save' || tab.id === 'milestone') return true;
+    return unlockedPanels.includes(tab.id);
+  });
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.find((t) => t.id === activeTab)) {
+      setActiveTab(visibleTabs[0].id);
+    }
+  }, [unlockedPanels]);
 
   useEffect(() => {
     if (gameContainerRef.current && !gameRef.current) {
@@ -74,12 +86,14 @@ function App() {
 
   const handleTabClick = (tabId: TabType) => {
     setActiveTab(tabId);
-    if (getPanelHasRedDot(tabId) && currentMilestone) {
-      const dotsForTab = pendingDots.filter(
-        (d) => d.type === 'panel' && d.target === tabId
-      );
-      for (const dot of dotsForTab) {
-        dismissRedDot(currentMilestone.id, dot.type, dot.target);
+    const dotsForTab = pendingDots.filter(
+      (d) => d.type === 'panel' && d.target === tabId
+    );
+    for (const dot of dotsForTab) {
+      for (const m of MILESTONES) {
+        if (m.redDots.some((rd) => rd.type === dot.type && rd.target === dot.target)) {
+          dismissRedDot(m.id, dot.type, dot.target);
+        }
       }
     }
   };
@@ -104,17 +118,21 @@ function App() {
         <div className="side-panel">
           <WeatherPanel />
           <div className="tabs">
-            {TABS.map((tab) => {
+            {visibleTabs.map((tab) => {
               const hasRedDot = getPanelHasRedDot(tab.id);
+              const isNewlyUnlocked = unlockedPanels.includes(tab.id) && pendingDots.some(
+                (d) => d.type === 'panel' && d.target === tab.id
+              );
               return (
                 <button
                   key={tab.id}
-                  className={`tab ${activeTab === tab.id ? 'active' : ''} ${hasRedDot ? 'has-red-dot' : ''}`}
+                  className={`tab-btn tab ${activeTab === tab.id ? 'active' : ''} ${hasRedDot ? 'has-red-dot' : ''}`}
                   onClick={() => handleTabClick(tab.id)}
                 >
                   <span className="tab-icon">{tab.icon}</span>
                   <span className="tab-label">{tab.label}</span>
-                  {hasRedDot && <span className="tab-red-dot">!</span>}
+                  {isNewlyUnlocked && <span className="tab-new-badge">NEW</span>}
+                  {hasRedDot && !isNewlyUnlocked && <span className="tab-red-dot">!</span>}
                 </button>
               );
             })}

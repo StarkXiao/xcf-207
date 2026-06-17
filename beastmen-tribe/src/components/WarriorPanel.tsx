@@ -1,5 +1,6 @@
 import { useGameStore } from '../store/useGameStore';
 import { WARRIORS } from '../data/warriors';
+import { MILESTONES } from '../data/milestones';
 import { RESOURCE_INFO } from '../data/trades';
 import type { WarriorType, Resources } from '../types';
 import { useState } from 'react';
@@ -20,13 +21,11 @@ export function WarriorPanel() {
   const getAvailablePopulation = useGameStore((s) => s.getAvailablePopulation);
   const retireWarrior = useGameStore((s) => s.retireWarrior);
   const getWarriorHasRedDot = useGameStore((s) => s.getWarriorHasRedDot);
-  const getCurrentMilestone = useGameStore((s) => s.getCurrentMilestone);
   const dismissRedDot = useGameStore((s) => s.dismissRedDot);
   const getWarriorsToUnlockNext = useGameStore((s) => s.getWarriorsToUnlockNext);
   const getNextMilestone = useGameStore((s) => s.getNextMilestone);
   const [retireMsg, setRetireMsg] = useState<string>('');
 
-  const currentMilestone = getCurrentMilestone();
   const nextWarriors = getWarriorsToUnlockNext();
   const nextMilestone = getNextMilestone();
 
@@ -48,8 +47,12 @@ export function WarriorPanel() {
 
   const handleWarriorClick = (type: WarriorType, available: boolean) => {
     if (!available) return;
-    if (getWarriorHasRedDot(type) && currentMilestone) {
-      dismissRedDot(currentMilestone.id, 'warrior', type);
+    if (getWarriorHasRedDot(type)) {
+      for (const m of MILESTONES) {
+        if (m.redDots.some((rd) => rd.type === 'warrior' && rd.target === type)) {
+          dismissRedDot(m.id, 'warrior', type);
+        }
+      }
     }
     trainWarrior(type);
   };

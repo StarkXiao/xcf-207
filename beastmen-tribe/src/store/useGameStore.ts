@@ -83,7 +83,7 @@ import {
 import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
 import { generateTrades } from '../data/trades';
-import { triggerRandomEvent } from '../data/events';
+import { triggerRandomEvent, getStoryEventByMilestone } from '../data/events';
 import {
   NODE_MARCH_TIME,
   EXP_GAIN,
@@ -567,6 +567,7 @@ const createInitialMilestoneState = (): MilestoneState => ({
   dismissedRedDots: [],
   pendingMilestonePopup: null,
   eventMilestoneTriggers: [],
+  completedStoryEvents: [],
   lastTownhallLevel: 1,
 });
 
@@ -1173,6 +1174,7 @@ const hydrateGameState = (parsed: GameState): GameState => {
         claimedMilestones: parsed.milestone.claimedMilestones || [],
         dismissedRedDots: parsed.milestone.dismissedRedDots || [],
         eventMilestoneTriggers: parsed.milestone.eventMilestoneTriggers || [],
+        completedStoryEvents: parsed.milestone.completedStoryEvents || [],
       }
     : createInitialMilestoneState();
 
@@ -2783,6 +2785,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           newPopulation += effect.value;
           break;
         case 'recruit_boost':
+          break;
+        case 'unlock_panel':
           break;
       }
     }
@@ -7032,15 +7036,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.addResources(popup.rewards);
     }
 
+    const newTriggerEvents = [...state.milestone.eventMilestoneTriggers, ...popup.triggerEvents];
+    const newCompletedStoryEvents = [...state.milestone.completedStoryEvents];
+
+    for (const eventId of popup.triggerEvents) {
+      const storyEvent = getStoryEventByMilestone(popup.id);
+      if (storyEvent && storyEvent.id === eventId && !newCompletedStoryEvents.includes(eventId)) {
+        newCompletedStoryEvents.push(eventId);
+        if (storyEvent.autoApply) {
+          state.applyEventEffects(storyEvent.effects);
+        }
+        const activeEvent: ActiveTribeEvent = {
+          id: generateId(),
+          eventId: storyEvent.id,
+          name: storyEvent.name,
+          icon: storyEvent.icon,
+          description: storyEvent.storyText,
+          effects: storyEvent.effects,
+          appliedAt: Date.now(),
+          duration: 60,
+        };
+        set({ activeEvents: [...get().activeEvents, activeEvent] });
+      }
+    }
+
     set({
       milestone: {
         ...state.milestone,
         claimedMilestones: [...state.milestone.claimedMilestones, popup.id],
         pendingMilestonePopup: null,
-        eventMilestoneTriggers: [
-          ...state.milestone.eventMilestoneTriggers,
-          ...popup.triggerEvents,
-        ],
+        eventMilestoneTriggers: newTriggerEvents,
+        completedStoryEvents: newCompletedStoryEvents,
         lastTownhallLevel: popup.townhallLevel,
       },
     });

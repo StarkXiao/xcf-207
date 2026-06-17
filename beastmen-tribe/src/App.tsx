@@ -14,9 +14,10 @@ import { WeatherPanel } from './components/WeatherPanel';
 import { DiplomacyPanel } from './components/DiplomacyPanel';
 import { EndingPanel } from './components/EndingPanel';
 import { StoragePanel } from './components/StoragePanel';
+import { TotemPanel } from './components/TotemPanel';
 import './App.css';
 
-type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'task' | 'trade' | 'storage' | 'diplomacy' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'totem' | 'task' | 'trade' | 'storage' | 'diplomacy' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'population', label: '人口', icon: '👥' },
@@ -25,6 +26,7 @@ const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'tech', label: '科技', icon: '🔬' },
   { id: 'battle', label: '战斗', icon: '🛡️' },
   { id: 'expedition', label: '远征', icon: '🗡️' },
+  { id: 'totem', label: '图腾', icon: '🗿' },
   { id: 'task', label: '委托', icon: '📜' },
   { id: 'trade', label: '交易', icon: '🏪' },
   { id: 'storage', label: '仓储', icon: '📦' },
@@ -81,6 +83,7 @@ function App() {
             {activeTab === 'tech' && <TechTreePanel />}
             {activeTab === 'battle' && <BattlePanel />}
             {activeTab === 'expedition' && <ExpeditionPanel />}
+            {activeTab === 'totem' && <TotemPanel />}
             {activeTab === 'task' && <TaskPanel />}
             {activeTab === 'trade' && <TradePanel />}
             {activeTab === 'storage' && <StoragePanel onClose={() => {}} />}

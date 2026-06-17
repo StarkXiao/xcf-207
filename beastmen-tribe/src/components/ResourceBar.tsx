@@ -10,6 +10,8 @@ export function ResourceBar() {
   const maxPopulation = useGameStore((s) => s.maxPopulation);
   const loyalty = useGameStore((s) => s.loyalty);
   const activeEvents = useGameStore((s) => s.activeEvents);
+  const faith = useGameStore((s) => s.totem.faith);
+  const maxFaith = useGameStore((s) => s.totem.maxFaith);
 
   const loyaltyColor =
     loyalty >= 80 ? '#4caf50' : loyalty >= 60 ? '#8bc34a' : loyalty >= 40 ? '#ff9800' : loyalty >= 20 ? '#ff5722' : '#e53935';
@@ -29,6 +31,12 @@ export function ResourceBar() {
           <span className="resource-icon">❤️</span>
           <span className="resource-value" style={{ color: loyaltyColor }}>
             {Math.floor(loyalty)}%
+          </span>
+        </div>
+        <div className="resource-item faith-item" title="信仰值">
+          <span className="resource-icon">✨</span>
+          <span className="resource-value" style={{ color: '#9c27b0' }}>
+            {Math.floor(faith)}/{Math.floor(maxFaith)}
           </span>
         </div>
         {activeEvents.length > 0 && (

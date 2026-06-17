@@ -65,11 +65,31 @@ import {
 } from '../data/diplomaticEvents';
 import { checkEndingConditions } from '../data/endings';
 import { SPOILAGE_COOLDOWN_MIN, SPOILAGE_COOLDOWN_MAX, generateSpoilageEvent } from '../data/spoilage';
+import {
+  TOTEMS,
+  BLESSINGS,
+  TOTEM_OFFERS,
+  getTotemCost,
+  getTotemFaithCost,
+  getTotemEffectBonus,
+  getBlessingBonus,
+  createInitialTotemState,
+  getFaithPerSecond,
+  getMaxFaith,
+  canUnlockTotem as checkCanUnlockTotem,
+  canActivateBlessing as checkCanActivateBlessing,
+  getAvailableBlessings,
+} from '../data/totems';
 import type {
   ResourceType,
   ResourceCapacity,
   TransportTask,
   SpoilageEvent,
+  TotemType,
+  BlessingType,
+  TotemUnlocked,
+  ActiveBlessing,
+  TotemEffectType,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -94,6 +114,18 @@ const calculateTechBonus = (
       }
     }
   }
+  return bonus;
+};
+
+const calculateTotemBonus = (
+  unlockedTotems: TotemUnlocked[],
+  activeBlessings: ActiveBlessing[],
+  effectType: TotemEffectType | TechEffectType,
+  target?: string
+): number => {
+  let bonus = 0;
+  bonus += getTotemEffectBonus(unlockedTotems, effectType, target);
+  bonus += getBlessingBonus(activeBlessings, effectType, target);
   return bonus;
 };
 
@@ -321,7 +353,7 @@ const createInitialState = (): GameState => {
     trainingQueue: [],
     invasion: null,
     trades: generateTrades(6),
-    unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall'],
+    unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall', 'totem_altar'],
     unlockedWarriors: ['grunt'],
     selectedBuildingId: null,
     lastSave: Date.now(),
@@ -356,6 +388,7 @@ const createInitialState = (): GameState => {
     allyReinforcements: [],
     totalTrades: 0,
     gameEnding: null,
+    totem: createInitialTotemState(),
   };
 };
 
@@ -497,6 +530,33 @@ const loadSave = (): GameState => {
       }
 
       state.lastOnlineTime = now;
+
+      state.totem = parsed.totem
+        ? {
+            ...createInitialTotemState(),
+            ...parsed.totem,
+            unlockedTotems: parsed.totem.unlockedTotems || [],
+            activeBlessings: parsed.totem.activeBlessings || [],
+            availableBlessings: parsed.totem.availableBlessings || [],
+            offers: TOTEM_OFFERS,
+            offerCooldowns: parsed.totem.offerCooldowns || {},
+            accumulation: {
+              lastTick: Date.now(),
+              perSecond: getFaithPerSecond(state.buildings, parsed.totem.unlockedTotems || []),
+            },
+          }
+        : createInitialTotemState();
+      state.totem.maxFaith = getMaxFaith(state.buildings);
+      state.totem.availableBlessings = getAvailableBlessings(state.totem.unlockedTotems);
+      state.totem.accumulation.perSecond = getFaithPerSecond(state.buildings, state.totem.unlockedTotems);
+      if (state.totem.faith > state.totem.maxFaith) {
+        state.totem.faith = state.totem.maxFaith;
+      }
+
+      if (!state.unlockedBuildings.includes('totem_altar')) {
+        state.unlockedBuildings = [...state.unlockedBuildings, 'totem_altar'];
+      }
+
       return state;
     }
   } catch (e) {
@@ -583,6 +643,15 @@ interface GameStore extends GameState {
   
   getStorageUsagePercent: (resource: ResourceType) => number;
   getBuildingStorageUsagePercent: (buildingId: string, resource: ResourceType) => number;
+
+  getTotemBonus: (effectType: TotemEffectType | TechEffectType, target?: string) => number;
+  unlockTotem: (totemId: TotemType) => { success: boolean; message: string };
+  activateTotem: (totemId: TotemType) => { success: boolean; message: string };
+  deactivateTotem: (totemId: TotemType) => { success: boolean; message: string };
+  upgradeTotem: (totemId: TotemType) => { success: boolean; message: string };
+  performOffering: (offerId: string) => { success: boolean; message: string };
+  activateBlessing: (blessingType: BlessingType) => { success: boolean; message: string };
+  processTotemTick: (delta: number) => void;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -803,14 +872,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!newUnlocked.includes('warehouse')) newUnlocked.push('warehouse');
       if (!newUnlocked.includes('caravanserai')) newUnlocked.push('caravanserai');
     }
+    if (type === 'totem_altar') {
+      if (!newUnlocked.includes('totem_pole')) newUnlocked.push('totem_pole');
+    }
+    if (type === 'totem_pole') {
+      if (!newUnlocked.includes('shrine')) newUnlocked.push('shrine');
+    }
 
     const newBuildings = [...state.buildings, newBuilding];
+    const newTotem = {
+      ...state.totem,
+      maxFaith: getMaxFaith(newBuildings),
+      accumulation: {
+        ...state.totem.accumulation,
+        perSecond: getFaithPerSecond(newBuildings, state.totem.unlockedTotems),
+      },
+    };
     set({
       buildings: newBuildings,
       unlockedBuildings: newUnlocked,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
       resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
       resources: calculateTotalResources(newBuildings),
+      totem: newTotem,
     });
 
     state.updateTaskProgress('build_buildings', 1, type);
@@ -852,12 +936,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { ...b, level: newLevel };
     });
 
+    const newTotemUp = {
+      ...state.totem,
+      maxFaith: getMaxFaith(newBuildings),
+      accumulation: {
+        ...state.totem.accumulation,
+        perSecond: getFaithPerSecond(newBuildings, state.totem.unlockedTotems),
+      },
+    };
     set({
       buildings: newBuildings,
       unlockedBuildings: newUnlockedBuildings,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
       resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
       resources: calculateTotalResources(newBuildings),
+      totem: newTotemUp,
     });
 
     state.updateTaskProgress('upgrade_buildings', 1);
@@ -877,9 +970,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (Object.keys(production).length === 0) return b;
 
       const elapsed = (now - b.lastCollect) / 1000;
-      const prodBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
-      const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
-      const totalProdBonus = 1 + prodBonus + globalProdBonus;
+      const prodTechBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
+      const globalProdTechBonus = calculateTechBonus(state.technologies, 'production_boost');
+      const prodTotemBonus = state.getTotemBonus('production_boost', b.type);
+      const globalProdTotemBonus = state.getTotemBonus('production_boost');
+      const totalProdBonus = 1 + prodTechBonus + globalProdTechBonus + prodTotemBonus + globalProdTotemBonus;
 
       const newStorage = { ...(b.storage || {}) };
       const cap = getBuildingCapacityByType(b.type, b.level);
@@ -961,10 +1056,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const completed: Warrior[] = [];
     const newQueue: TrainingQueue[] = [];
     const efficiency = state.recruitEfficiency;
-    const trainSpeedBonus = calculateTechBonus(state.technologies, 'train_speed');
+    const trainSpeedTechBonus = calculateTechBonus(state.technologies, 'train_speed');
+    const trainSpeedTotemBonus = state.getTotemBonus('train_speed');
     const weatherEffects = state.getWeatherEffects();
     const weatherTrainBonus = weatherEffects.trainingSpeedModifier;
-    const scaledDelta = delta * efficiency * (1 + trainSpeedBonus + weatherTrainBonus);
+    const scaledDelta = delta * efficiency * (1 + trainSpeedTechBonus + trainSpeedTotemBonus + weatherTrainBonus);
 
     for (const queue of state.trainingQueue) {
       let newProgress = queue.progress + scaledDelta;
@@ -1074,16 +1170,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       log.push(`🤝 ${reinforcement.factionIcon} ${reinforcement.factionName}的援军加入战斗！`);
     }
 
-    const wallDefense = calculateWallDefense(state.buildings, state.technologies);
+    const wallTechBonus = calculateTechBonus(state.technologies, 'wall_defense');
+    const wallTotemBonus = state.getTotemBonus('wall_defense');
+    const baseWallDefense = calculateWallDefense(state.buildings, state.technologies);
+    const wallDefense = Math.floor(baseWallDefense * (1 + wallTotemBonus) / (1 + wallTechBonus) * (1 + wallTechBonus + wallTotemBonus));
     const loyaltyBonus = Math.floor(state.loyalty / 20);
 
     myWarriors = myWarriors.map((w) => {
-      const atkBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
+      const atkTechBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
         calculateTechBonus(state.technologies, 'attack_boost');
-      const defBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
+      const defTechBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
         calculateTechBonus(state.technologies, 'defense_boost');
-      const hpBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
+      const hpTechBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
         calculateTechBonus(state.technologies, 'hp_boost');
+      const atkTotemBonus = state.getTotemBonus('attack_boost', w.type) +
+        state.getTotemBonus('attack_boost');
+      const defTotemBonus = state.getTotemBonus('defense_boost', w.type) +
+        state.getTotemBonus('defense_boost');
+      const hpTotemBonus = state.getTotemBonus('hp_boost', w.type) +
+        state.getTotemBonus('hp_boost');
+      const atkBonus = atkTechBonus + atkTotemBonus;
+      const defBonus = defTechBonus + defTotemBonus;
+      const hpBonus = hpTechBonus + hpTotemBonus;
 
       return {
         ...w,
@@ -1249,9 +1357,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     if (state.population <= 0) return;
 
-    const foodConsumptionBonus = calculateTechBonus(state.technologies, 'food_consumption');
+    const foodConsumptionTechBonus = calculateTechBonus(state.technologies, 'food_consumption');
+    const foodConsumptionTotemBonus = state.getTotemBonus('food_consumption');
     const loyaltyDecayBonus = calculateTechBonus(state.technologies, 'loyalty_decay');
-    const adjustedConsumptionRate = state.foodConsumptionRate * (1 + foodConsumptionBonus);
+    const adjustedConsumptionRate = state.foodConsumptionRate * (1 + foodConsumptionTechBonus + foodConsumptionTotemBonus);
     const adjustedLoyaltyDecay = LOYALTY_DECAY_NO_FOOD * (1 + loyaltyDecayBonus);
 
     const foodConsumed = state.population * adjustedConsumptionRate * delta;
@@ -1417,17 +1526,27 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let loot: Partial<Resources> = {};
     let casualties = 0;
     const baseExpGain = EXP_GAIN[node.difficulty] || 10;
-    const expBonus = calculateTechBonus(state.technologies, 'exp_bonus');
-    const expGain = Math.floor(baseExpGain * (1 + expBonus));
+    const expTechBonus = calculateTechBonus(state.technologies, 'exp_bonus');
+    const expTotemBonus = state.getTotemBonus('exp_bonus');
+    const expGain = Math.floor(baseExpGain * (1 + expTechBonus + expTotemBonus));
     let warriors = expedition.warriors.map((w) => ({ ...w }));
 
     warriors = warriors.map((w) => {
-      const atkBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
+      const atkTechBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
         calculateTechBonus(state.technologies, 'attack_boost');
-      const defBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
+      const defTechBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
         calculateTechBonus(state.technologies, 'defense_boost');
-      const hpBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
+      const hpTechBonus = calculateTechBonus(state.technologies, 'hp_boost', w.type) +
         calculateTechBonus(state.technologies, 'hp_boost');
+      const atkTotemBonus = state.getTotemBonus('attack_boost', w.type) +
+        state.getTotemBonus('attack_boost');
+      const defTotemBonus = state.getTotemBonus('defense_boost', w.type) +
+        state.getTotemBonus('defense_boost');
+      const hpTotemBonus = state.getTotemBonus('hp_boost', w.type) +
+        state.getTotemBonus('hp_boost');
+      const atkBonus = atkTechBonus + atkTotemBonus;
+      const defBonus = defTechBonus + defTotemBonus;
+      const hpBonus = hpTechBonus + hpTotemBonus;
 
       return {
         ...w,
@@ -1595,10 +1714,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       log.push(`💀 远征队全军覆没...`);
     }
 
-    const lootBonus = calculateTechBonus(state.technologies, 'loot_bonus');
+    const lootTechBonus = calculateTechBonus(state.technologies, 'loot_bonus');
+    const lootTotemBonus = state.getTotemBonus('loot_bonus');
     const adjustedLoot: Partial<Resources> = {};
     for (const [key, amount] of Object.entries(loot)) {
-      adjustedLoot[key as keyof Resources] = Math.floor((amount as number) * (1 + lootBonus));
+      adjustedLoot[key as keyof Resources] = Math.floor((amount as number) * (1 + lootTechBonus + lootTotemBonus));
     }
 
     const newTotalLoot: Partial<Resources> = { ...expedition.totalLoot };
@@ -2815,6 +2935,247 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return true;
   },
 
+  getTotemBonus: (effectType, target) => {
+    const state = get();
+    return calculateTotemBonus(state.totem.unlockedTotems, state.totem.activeBlessings, effectType, target);
+  },
+
+  unlockTotem: (totemId) => {
+    const state = get();
+    const check = checkCanUnlockTotem(totemId, state.totem.unlockedTotems, state.buildings, state.totem.faith);
+    if (!check.canUnlock) {
+      return { success: false, message: check.reason || '无法解锁' };
+    }
+    const config = TOTEMS[totemId];
+    if (!config) return { success: false, message: '未知图腾' };
+    const resourceCost = getTotemCost(totemId, 0);
+    const faithCost = getTotemFaithCost(totemId, 0);
+    if (!state.canAfford(resourceCost)) {
+      return { success: false, message: '资源不足' };
+    }
+    if (state.totem.faith < faithCost) {
+      return { success: false, message: `信仰值不足（需要${faithCost}）` };
+    }
+    state.spendResources(resourceCost);
+    const newUnlocked: TotemUnlocked[] = [
+      ...state.totem.unlockedTotems,
+      {
+        totemId,
+        activated: true,
+        level: 1,
+        maxLevel: 5,
+      },
+    ];
+    const newAvailableBlessings = getAvailableBlessings(newUnlocked);
+    const newTotem = {
+      ...state.totem,
+      faith: state.totem.faith - faithCost,
+      unlockedTotems: newUnlocked,
+      availableBlessings: newAvailableBlessings,
+      accumulation: {
+        ...state.totem.accumulation,
+        perSecond: getFaithPerSecond(state.buildings, newUnlocked),
+      },
+    };
+    let newLoyalty = state.loyalty;
+    const loyaltyBoost = calculateTotemBonus(newUnlocked, [], 'loyalty_boost');
+    if (loyaltyBoost > 0 && loyaltyBoost < 1) {
+      newLoyalty = Math.min(100, newLoyalty + loyaltyBoost * 100);
+    }
+    set({
+      totem: newTotem,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+    return { success: true, message: `成功解锁${config.name}！` };
+  },
+
+  activateTotem: (totemId) => {
+    const state = get();
+    const unlocked = state.totem.unlockedTotems.find((t) => t.totemId === totemId);
+    if (!unlocked) return { success: false, message: '尚未解锁该图腾' };
+    if (unlocked.activated) return { success: false, message: '该图腾已激活' };
+    const newUnlocked = state.totem.unlockedTotems.map((t) =>
+      t.totemId === totemId ? { ...t, activated: true } : t
+    );
+    const newAvailableBlessings = getAvailableBlessings(newUnlocked);
+    set({
+      totem: {
+        ...state.totem,
+        unlockedTotems: newUnlocked,
+        availableBlessings: newAvailableBlessings,
+        accumulation: {
+          ...state.totem.accumulation,
+          perSecond: getFaithPerSecond(state.buildings, newUnlocked),
+        },
+      },
+    });
+    return { success: true, message: `${TOTEMS[totemId].name}已激活！` };
+  },
+
+  deactivateTotem: (totemId) => {
+    const state = get();
+    const unlocked = state.totem.unlockedTotems.find((t) => t.totemId === totemId);
+    if (!unlocked) return { success: false, message: '尚未解锁该图腾' };
+    if (!unlocked.activated) return { success: false, message: '该图腾未激活' };
+    const activeCount = state.totem.unlockedTotems.filter((t) => t.activated).length;
+    if (activeCount <= 1) return { success: false, message: '至少需要激活一个图腾' };
+    const newUnlocked = state.totem.unlockedTotems.map((t) =>
+      t.totemId === totemId ? { ...t, activated: false } : t
+    );
+    const newAvailableBlessings = getAvailableBlessings(newUnlocked);
+    set({
+      totem: {
+        ...state.totem,
+        unlockedTotems: newUnlocked,
+        availableBlessings: newAvailableBlessings,
+        accumulation: {
+          ...state.totem.accumulation,
+          perSecond: getFaithPerSecond(state.buildings, newUnlocked),
+        },
+      },
+    });
+    return { success: true, message: `${TOTEMS[totemId].name}已停用` };
+  },
+
+  upgradeTotem: (totemId) => {
+    const state = get();
+    const unlocked = state.totem.unlockedTotems.find((t) => t.totemId === totemId);
+    if (!unlocked) return { success: false, message: '尚未解锁该图腾' };
+    if (unlocked.level >= unlocked.maxLevel) return { success: false, message: '图腾已达最高等级' };
+    const resourceCost = getTotemCost(totemId, unlocked.level);
+    const faithCost = getTotemFaithCost(totemId, unlocked.level);
+    if (!state.canAfford(resourceCost)) return { success: false, message: '资源不足' };
+    if (state.totem.faith < faithCost) return { success: false, message: `信仰值不足（需要${faithCost}）` };
+    state.spendResources(resourceCost);
+    const newUnlocked = state.totem.unlockedTotems.map((t) =>
+      t.totemId === totemId ? { ...t, level: t.level + 1 } : t
+    );
+    set({
+      totem: {
+        ...state.totem,
+        faith: state.totem.faith - faithCost,
+        unlockedTotems: newUnlocked,
+      },
+    });
+    return { success: true, message: `${TOTEMS[totemId].name}升级到Lv.${unlocked.level + 1}！` };
+  },
+
+  performOffering: (offerId) => {
+    const state = get();
+    const offer = TOTEM_OFFERS.find((o) => o.id === offerId);
+    if (!offer) return { success: false, message: '未知献祭' };
+    const cooldown = state.totem.offerCooldowns[offerId] || 0;
+    if (cooldown > 0) return { success: false, message: `冷却中（${Math.ceil(cooldown)}秒）` };
+    if (!state.canAfford(offer.resourceCost)) return { success: false, message: '资源不足' };
+    state.spendResources(offer.resourceCost);
+    const newFaith = Math.min(state.totem.maxFaith, state.totem.faith + offer.faithReward);
+    const gained = newFaith - state.totem.faith;
+    const newCooldowns = { ...state.totem.offerCooldowns, [offerId]: offer.cooldown };
+    const newTotem = {
+      ...state.totem,
+      faith: newFaith,
+      offerCooldowns: newCooldowns,
+      totalFaithGained: state.totem.totalFaithGained + gained,
+      totalOfferings: state.totem.totalOfferings + 1,
+    };
+    let newLoyalty = state.loyalty;
+    if (offer.id === 'offer_blood') {
+      newLoyalty = Math.max(0, newLoyalty - 2);
+    } else {
+      newLoyalty = Math.min(100, newLoyalty + 1);
+    }
+    set({
+      totem: newTotem,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+    return { success: true, message: `献祭成功！获得${gained}点信仰` };
+  },
+
+  activateBlessing: (blessingType) => {
+    const state = get();
+    const check = checkCanActivateBlessing(
+      blessingType,
+      state.totem.unlockedTotems,
+      state.buildings,
+      state.totem.faith
+    );
+    if (!check.canActivate) {
+      return { success: false, message: check.reason || '无法激活祝福' };
+    }
+    const blessing = BLESSINGS[blessingType];
+    if (!blessing) return { success: false, message: '未知祝福' };
+    const hasActive = state.totem.activeBlessings.some(
+      (b) => b.blessingType === blessingType
+    );
+    if (hasActive) return { success: false, message: '该祝福已生效中' };
+    const activeBlessing: ActiveBlessing = {
+      id: generateId(),
+      blessingType,
+      name: blessing.name,
+      icon: blessing.icon,
+      effects: blessing.effects,
+      duration: blessing.duration,
+      remaining: blessing.duration,
+      startedAt: Date.now(),
+    };
+    set({
+      totem: {
+        ...state.totem,
+        faith: state.totem.faith - blessing.faithCost,
+        activeBlessings: [...state.totem.activeBlessings, activeBlessing],
+        totalBlessings: state.totem.totalBlessings + 1,
+      },
+    });
+    return { success: true, message: `${blessing.name}已激活！` };
+  },
+
+  processTotemTick: (delta) => {
+    const state = get();
+    const totem = state.totem;
+
+    const perSecond = getFaithPerSecond(state.buildings, totem.unlockedTotems);
+    const faithGain = perSecond * delta;
+    let newFaith = Math.min(totem.maxFaith, totem.faith + faithGain);
+
+    const newActiveBlessings = totem.activeBlessings
+      .map((b) => ({ ...b, remaining: b.remaining - delta }))
+      .filter((b) => b.remaining > 0);
+
+    const newOfferCooldowns: Record<string, number> = {};
+    for (const [key, cd] of Object.entries(totem.offerCooldowns)) {
+      const newCd = cd - delta;
+      if (newCd > 0) newOfferCooldowns[key] = newCd;
+    }
+
+    let newPopulation = state.population;
+    const popGrowthBonus = calculateTotemBonus(totem.unlockedTotems, newActiveBlessings, 'population_growth');
+    if (popGrowthBonus > 0 && newPopulation < state.maxPopulation && state.loyalty > 30) {
+      const baseGrowth = POP_GROWTH_RATE * (state.loyalty / 100) * delta;
+      const enhancedGrowth = baseGrowth * (1 + popGrowthBonus);
+      if (Math.random() < enhancedGrowth) {
+        newPopulation = Math.min(state.maxPopulation, newPopulation + 1);
+      }
+    }
+
+    set({
+      totem: {
+        ...totem,
+        faith: newFaith,
+        activeBlessings: newActiveBlessings,
+        offerCooldowns: newOfferCooldowns,
+        accumulation: {
+          ...totem.accumulation,
+          lastTick: Date.now(),
+          perSecond,
+        },
+        totalFaithGained: totem.totalFaithGained + (newFaith - totem.faith > 0 ? newFaith - totem.faith : 0),
+      },
+      population: newPopulation,
+    });
+  },
+
   checkForEnding: () => {
     const state = get();
     return checkEndingConditions(state);
@@ -2913,6 +3274,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processAllyReinforcementsTick(delta);
     state.processTransportTick(delta);
     state.processSpoilageTick(delta);
+    state.processTotemTick(delta);
 
     const ending = state.checkForEnding();
     if (ending) {
@@ -2936,6 +3298,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (capacityChanged) {
       set({
         resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
+        totem: {
+          ...state.totem,
+          maxFaith: getMaxFaith(newBuildings),
+          accumulation: {
+            ...state.totem.accumulation,
+            perSecond: getFaithPerSecond(newBuildings, state.totem.unlockedTotems),
+          },
+        },
       });
     }
 

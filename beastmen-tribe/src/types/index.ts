@@ -19,7 +19,10 @@ export type BuildingType =
   | 'wall'
   | 'hut'
   | 'warehouse'
-  | 'caravanserai';
+  | 'caravanserai'
+  | 'totem_altar'
+  | 'totem_pole'
+  | 'shrine';
 
 export interface BuildingConfig {
   id: BuildingType;
@@ -621,6 +624,118 @@ export interface GameEnding {
   };
 }
 
+export type TotemType =
+  | 'wolf'
+  | 'bear'
+  | 'eagle'
+  | 'snake'
+  | 'crow'
+  | 'sun'
+  | 'moon'
+  | 'ancestor';
+
+export type TotemEffectType =
+  | 'faith_gain'
+  | 'attack_boost'
+  | 'defense_boost'
+  | 'hp_boost'
+  | 'production_boost'
+  | 'loyalty_boost'
+  | 'population_growth'
+  | 'food_consumption'
+  | 'loot_bonus'
+  | 'exp_bonus'
+  | 'train_speed'
+  | 'wall_defense';
+
+export interface TotemEffect {
+  type: TotemEffectType;
+  value: number;
+  target?: WarriorType | ResourceType | BuildingType;
+}
+
+export interface TotemConfig {
+  id: TotemType;
+  name: string;
+  description: string;
+  icon: string;
+  tier: 1 | 2 | 3 | 4;
+  baseCost: Partial<Resources>;
+  faithCost: number;
+  requires?: { totem?: TotemType; building?: BuildingType; faith?: number };
+  effects: TotemEffect[];
+  blessingEffect?: BlessingEffect;
+}
+
+export type TotemUnlocked = {
+  totemId: TotemType;
+  activated: boolean;
+  level: number;
+  maxLevel: number;
+};
+
+export type BlessingType =
+  | 'war_banner'
+  | 'iron_skin'
+  | 'bloodlust'
+  | 'ancestor_guidance'
+  | 'fertility'
+  | 'harvest'
+  | 'shield_of_faith'
+  | 'storm_call';
+
+export interface BlessingEffect {
+  type: BlessingType;
+  name: string;
+  description: string;
+  icon: string;
+  duration: number;
+  effects: TotemEffect[];
+  faithCost: number;
+  requires?: { totem?: TotemType; building?: BuildingType; minFaith?: number };
+}
+
+export interface ActiveBlessing {
+  id: string;
+  blessingType: BlessingType;
+  name: string;
+  icon: string;
+  effects: TotemEffect[];
+  duration: number;
+  remaining: number;
+  startedAt: number;
+}
+
+export interface TotemOffer {
+  id: string;
+  totemId: TotemType;
+  name: string;
+  icon: string;
+  description: string;
+  faithReward: number;
+  resourceCost: Partial<Resources>;
+  cooldown: number;
+}
+
+export interface FaithAccumulation {
+  lastTick: number;
+  perSecond: number;
+}
+
+export interface TotemState {
+  faith: number;
+  maxFaith: number;
+  unlockedTotems: TotemUnlocked[];
+  activeBlessings: ActiveBlessing[];
+  availableBlessings: BlessingType[];
+  offers: TotemOffer[];
+  offerCooldowns: Record<string, number>;
+  accumulation: FaithAccumulation;
+  totalFaithGained: number;
+  totalOfferings: number;
+  totalBlessings: number;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -671,4 +786,5 @@ export interface GameState {
   offlineEarnings: OfflineEarnings | null;
   lastOnlineTime: number;
   gameEnding: GameEnding | null;
+  totem: TotemState;
 }

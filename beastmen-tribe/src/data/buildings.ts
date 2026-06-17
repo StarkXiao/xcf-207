@@ -113,6 +113,36 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     upgradeMultiplier: 1.8,
     requires: 'market',
   },
+  totem_altar: {
+    id: 'totem_altar',
+    name: '图腾祭坛',
+    description: '信仰的起点，每秒产出信仰值，解锁基础图腾',
+    icon: '🗿',
+    baseCost: { wood: 100, stone: 150, gold: 50 },
+    maxLevel: 5,
+    upgradeMultiplier: 1.7,
+    requires: 'townhall',
+  },
+  totem_pole: {
+    id: 'totem_pole',
+    name: '图腾柱',
+    description: '承载部落记忆，增加信仰上限，解锁进阶图腾',
+    icon: '🎋',
+    baseCost: { wood: 200, stone: 100, gold: 80 },
+    maxLevel: 5,
+    upgradeMultiplier: 1.8,
+    requires: 'totem_altar',
+  },
+  shrine: {
+    id: 'shrine',
+    name: '圣殿',
+    description: '神圣的宗教建筑，大幅提升信仰产出与上限，解锁高级图腾',
+    icon: '⛩️',
+    baseCost: { stone: 300, gold: 200, iron: 50, wood: 200 },
+    maxLevel: 5,
+    upgradeMultiplier: 2.0,
+    requires: 'totem_pole',
+  },
 };
 
 export const getBuildingCost = (type: string, level: number): Partial<Record<string, number>> => {

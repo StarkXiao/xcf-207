@@ -43,7 +43,23 @@ import type {
   BattleLogEntry,
   BattleSummary,
   PositionRow,
+  SaveSlotInfo,
+  LoadSaveResult,
 } from '../types';
+import {
+  getSaveSlotInfos,
+  saveToSlot as saveToSlotManager,
+  loadSlot,
+  deleteSlot,
+  updateSlotNote as updateSlotNoteManager,
+  rollbackToBackup,
+  autoSave,
+  quickSave,
+  getMostRecentSlot,
+  migrateLegacySave,
+  getBackupExists,
+  markSlotCorrupted as markSlotCorruptedManager,
+} from '../utils/saveManager';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity, checkBuildingRequirements as checkBuildReqs, getBuildTime, getUpgradeTime, getProductionEstimate as getProdEstimate, getUpgradeHints as getUpgHints, getUnlockableBuildings as getUnlockableBldgs, getRequirementDescription } from '../data/buildings';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
@@ -938,192 +954,206 @@ const calculateOfflineEarningsInternal = (
   return { updatedBuildings, earnings };
 };
 
+const hydrateGameState = (parsed: GameState): GameState => {
+  const state: GameState = {
+    ...createInitialState(),
+    ...parsed,
+    trades: generateTrades(6, 0, parsed.factions),
+    selectedBuildingId: null,
+    activeEvents: parsed.activeEvents || [],
+    population: parsed.population ?? 8,
+    maxPopulation: parsed.maxPopulation ?? calculateMaxPopulation(parsed.buildings, parsed.technologies || []),
+    loyalty: parsed.loyalty ?? 70,
+    foodConsumptionRate: parsed.foodConsumptionRate ?? FOOD_PER_POP,
+    eventCooldown: parsed.eventCooldown ?? EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
+    recruitEfficiency: parsed.recruitEfficiency ?? 0.5 + ((parsed.loyalty ?? 70) / 100) * 0.5,
+    factions: parsed.factions || createInitialFactions(),
+    activeDiplomaticEvents: parsed.activeDiplomaticEvents || [],
+    diplomaticEventCooldown: parsed.diplomaticEventCooldown ?? getDiplomaticEventInterval(),
+    allyReinforcements: parsed.allyReinforcements || [],
+    totalTrades: parsed.totalTrades || 0,
+    gameEnding: parsed.gameEnding || null,
+    transportTasks: parsed.transportTasks || [],
+    spoilageEvents: parsed.spoilageEvents || [],
+    spoilageCooldown: parsed.spoilageCooldown ?? SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
+    offlineEarnings: parsed.offlineEarnings || null,
+    lastOnlineTime: parsed.lastOnlineTime || Date.now(),
+  };
+  state.maxPopulation = calculateMaxPopulation(state.buildings, state.technologies);
+  state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
+  state.activeExpedition = parsed.activeExpedition || null;
+  state.expeditionNotifications = parsed.expeditionNotifications || [];
+  state.totalExpeditions = parsed.totalExpeditions || 0;
+  state.expeditionWins = parsed.expeditionWins || 0;
+  state.technologies = parsed.technologies || [];
+  state.activeResearch = parsed.activeResearch || null;
+  state.unlockedTechnologies = parsed.unlockedTechnologies || [];
+  state.taskChains = parsed.taskChains || createTaskChains(1);
+  state.lastTaskRefreshDay = parsed.lastTaskRefreshDay ?? 1;
+  state.taskRefreshInterval = parsed.taskRefreshInterval ?? TASK_REFRESH_INTERVAL;
+  state.totalChainsCompleted = parsed.totalChainsCompleted || 0;
+  state.totalChainsFailed = parsed.totalChainsFailed || 0;
+  state.season = parsed.season || 'spring';
+  state.weather = parsed.weather || 'sunny';
+  state.seasonProgress = parsed.seasonProgress || 0;
+  state.weatherDuration = parsed.weatherDuration ?? getWeatherDuration(state.weather);
+
+  const needsMigration = state.buildings.some((b) => !b.storage || Object.keys(b.storage).length === 0);
+  if (needsMigration && parsed.resources) {
+    const townhall = state.buildings.find((b) => b.type === 'townhall');
+    if (townhall) {
+      townhall.storage = { ...parsed.resources };
+    } else {
+      for (const b of state.buildings) {
+        if (!b.storage) b.storage = {};
+      }
+    }
+  }
+  state.buildings = state.buildings.map((b) => ({
+    ...b,
+    storage: b.storage || {},
+  }));
+
+  state.resourceCapacity = calculateResourceCapacity(state.buildings, state.technologies);
+  state.resources = calculateTotalResources(state.buildings);
+  
+  if (state.taskChains.length > 0) {
+    state.taskChains = state.taskChains.map((c) => ({
+      ...c,
+      chainRewardClaimed: c.chainRewardClaimed ?? false,
+      failed: c.failed ?? c.tasks.some((t) => t.status === 'failed'),
+    }));
+  }
+
+  const now = Date.now();
+
+  const { state: repairedState, repairs } = repairCorruptedSave(state, now);
+  Object.assign(state, repairedState);
+
+  const { updatedBuildings, earnings } = calculateOfflineEarningsInternal(state, now);
+  state.buildings = updatedBuildings;
+  state.resources = calculateTotalResources(state.buildings);
+
+  if (earnings) {
+    if (repairs.length > 0) {
+      earnings.warnings = [...repairs, ...earnings.warnings];
+    }
+    state.offlineEarnings = earnings;
+  } else if (repairs.length > 0) {
+    state.offlineEarnings = {
+      resources: {},
+      duration: 0,
+      effectiveDuration: 0,
+      collected: false,
+      timestamp: now,
+      baseEfficiency: BASE_OFFLINE_EFFICIENCY,
+      timeDecayRate: 1,
+      buildingBonus: 0,
+      totemBonus: 0,
+      governmentBonus: 0,
+      techBonus: 0,
+      cappedByStorage: {},
+      perBuildingDetail: [],
+      warnings: repairs,
+    };
+  }
+
+  state.lastOnlineTime = now;
+
+  state.totem = parsed.totem
+    ? {
+        ...createInitialTotemState(),
+        ...parsed.totem,
+        unlockedTotems: parsed.totem.unlockedTotems || [],
+        activeBlessings: parsed.totem.activeBlessings || [],
+        availableBlessings: parsed.totem.availableBlessings || [],
+        offers: TOTEM_OFFERS,
+        offerCooldowns: parsed.totem.offerCooldowns || {},
+        accumulation: {
+          lastTick: Date.now(),
+          perSecond: getFaithPerSecond(state.buildings, parsed.totem.unlockedTotems || []),
+        },
+      }
+    : createInitialTotemState();
+  state.totem.maxFaith = getMaxFaith(state.buildings);
+  state.totem.availableBlessings = getAvailableBlessings(state.totem.unlockedTotems);
+  state.totem.accumulation.perSecond = getFaithPerSecond(state.buildings, state.totem.unlockedTotems);
+  if (state.totem.faith > state.totem.maxFaith) {
+    state.totem.faith = state.totem.maxFaith;
+  }
+
+  if (!state.unlockedBuildings.includes('totem_altar')) {
+    state.unlockedBuildings = [...state.unlockedBuildings, 'totem_altar'];
+  }
+
+  state.trainingQueue = (state.trainingQueue || []).map((q) => ({
+    ...q,
+    populationCost: q.populationCost || WARRIORS[q.type]?.populationCost || 1,
+  }));
+
+  const militaryPop = calculateMilitaryPopulation(state.warriors);
+  const trainingPop = calculateTrainingPopulation(state.trainingQueue);
+  const totalArmyPop = militaryPop + trainingPop;
+  if (state.population < totalArmyPop) {
+    state.population = totalArmyPop;
+    state.maxPopulation = Math.max(state.maxPopulation, state.population + 5);
+  }
+
+  state.nightRaid = parsed.nightRaid
+    ? {
+        ...createInitialNightRaidState(),
+        ...parsed.nightRaid,
+        reports: parsed.nightRaid.reports || [],
+        availableTraps: parsed.nightRaid.availableTraps || {
+          spike: 0,
+          fire: 0,
+          poison: 0,
+          net: 0,
+          boulder: 0,
+        },
+        placedTraps: parsed.nightRaid.placedTraps || [],
+        garrisonWarriors: parsed.nightRaid.garrisonWarriors || [],
+      }
+    : createInitialNightRaidState();
+
+  state.government = parsed.government
+    ? {
+        ...createInitialGovernmentState(state.day),
+        ...parsed.government,
+        chieftain: {
+          ...createInitialGovernmentState(state.day).chieftain,
+          ...parsed.government.chieftain,
+          heirs: parsed.government.chieftain?.heirs || [],
+        },
+        activePolicies: parsed.government.activePolicies || [],
+        completedPolicies: parsed.government.completedPolicies || [],
+        availablePolicies: parsed.government.availablePolicies || POLICIES.filter(p => p.tier === 1).map(p => p.id),
+        unlockedPolicyCategories: parsed.government.unlockedPolicyCategories || ['military', 'economy', 'culture'],
+      }
+    : createInitialGovernmentState(state.day);
+
+  state.buildQueue = parsed.buildQueue || [];
+  state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
+
+  return state;
+};
+
 const loadSave = (): GameState => {
   try {
+    const mostRecent = getMostRecentSlot();
+    if (mostRecent && !mostRecent.isCorrupted) {
+      return hydrateGameState(mostRecent.data);
+    }
+
     const saved = localStorage.getItem(SAVE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved) as GameState;
-      const state: GameState = {
-        ...createInitialState(),
-        ...parsed,
-        trades: generateTrades(6, 0, parsed.factions),
-        selectedBuildingId: null,
-        activeEvents: parsed.activeEvents || [],
-        population: parsed.population ?? 8,
-        maxPopulation: parsed.maxPopulation ?? calculateMaxPopulation(parsed.buildings, parsed.technologies || []),
-        loyalty: parsed.loyalty ?? 70,
-        foodConsumptionRate: parsed.foodConsumptionRate ?? FOOD_PER_POP,
-        eventCooldown: parsed.eventCooldown ?? EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
-        recruitEfficiency: parsed.recruitEfficiency ?? 0.5 + ((parsed.loyalty ?? 70) / 100) * 0.5,
-        factions: parsed.factions || createInitialFactions(),
-        activeDiplomaticEvents: parsed.activeDiplomaticEvents || [],
-        diplomaticEventCooldown: parsed.diplomaticEventCooldown ?? getDiplomaticEventInterval(),
-        allyReinforcements: parsed.allyReinforcements || [],
-        totalTrades: parsed.totalTrades || 0,
-        gameEnding: parsed.gameEnding || null,
-        transportTasks: parsed.transportTasks || [],
-        spoilageEvents: parsed.spoilageEvents || [],
-        spoilageCooldown: parsed.spoilageCooldown ?? SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
-        offlineEarnings: parsed.offlineEarnings || null,
-        lastOnlineTime: parsed.lastOnlineTime || Date.now(),
-      };
-      state.maxPopulation = calculateMaxPopulation(state.buildings, state.technologies);
-      state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
-      state.activeExpedition = parsed.activeExpedition || null;
-      state.expeditionNotifications = parsed.expeditionNotifications || [];
-      state.totalExpeditions = parsed.totalExpeditions || 0;
-      state.expeditionWins = parsed.expeditionWins || 0;
-      state.technologies = parsed.technologies || [];
-      state.activeResearch = parsed.activeResearch || null;
-      state.unlockedTechnologies = parsed.unlockedTechnologies || [];
-      state.taskChains = parsed.taskChains || createTaskChains(1);
-      state.lastTaskRefreshDay = parsed.lastTaskRefreshDay ?? 1;
-      state.taskRefreshInterval = parsed.taskRefreshInterval ?? TASK_REFRESH_INTERVAL;
-      state.totalChainsCompleted = parsed.totalChainsCompleted || 0;
-      state.totalChainsFailed = parsed.totalChainsFailed || 0;
-      state.season = parsed.season || 'spring';
-      state.weather = parsed.weather || 'sunny';
-      state.seasonProgress = parsed.seasonProgress || 0;
-      state.weatherDuration = parsed.weatherDuration ?? getWeatherDuration(state.weather);
-
-      const needsMigration = state.buildings.some((b) => !b.storage || Object.keys(b.storage).length === 0);
-      if (needsMigration && parsed.resources) {
-        const townhall = state.buildings.find((b) => b.type === 'townhall');
-        if (townhall) {
-          townhall.storage = { ...parsed.resources };
-        } else {
-          for (const b of state.buildings) {
-            if (!b.storage) b.storage = {};
-          }
-        }
+      try {
+        migrateLegacySave(parsed);
+      } catch (e) {
+        console.warn('Legacy save migration failed:', e);
       }
-      state.buildings = state.buildings.map((b) => ({
-        ...b,
-        storage: b.storage || {},
-      }));
-
-      state.resourceCapacity = calculateResourceCapacity(state.buildings, state.technologies);
-      state.resources = calculateTotalResources(state.buildings);
-      
-      if (state.taskChains.length > 0) {
-        state.taskChains = state.taskChains.map((c) => ({
-          ...c,
-          chainRewardClaimed: c.chainRewardClaimed ?? false,
-          failed: c.failed ?? c.tasks.some((t) => t.status === 'failed'),
-        }));
-      }
-
-      const now = Date.now();
-
-      const { state: repairedState, repairs } = repairCorruptedSave(state, now);
-      Object.assign(state, repairedState);
-
-      const { updatedBuildings, earnings } = calculateOfflineEarningsInternal(state, now);
-      state.buildings = updatedBuildings;
-      state.resources = calculateTotalResources(state.buildings);
-
-      if (earnings) {
-        if (repairs.length > 0) {
-          earnings.warnings = [...repairs, ...earnings.warnings];
-        }
-        state.offlineEarnings = earnings;
-      } else if (repairs.length > 0) {
-        state.offlineEarnings = {
-          resources: {},
-          duration: 0,
-          effectiveDuration: 0,
-          collected: false,
-          timestamp: now,
-          baseEfficiency: BASE_OFFLINE_EFFICIENCY,
-          timeDecayRate: 1,
-          buildingBonus: 0,
-          totemBonus: 0,
-          governmentBonus: 0,
-          techBonus: 0,
-          cappedByStorage: {},
-          perBuildingDetail: [],
-          warnings: repairs,
-        };
-      }
-
-      state.lastOnlineTime = now;
-
-      state.totem = parsed.totem
-        ? {
-            ...createInitialTotemState(),
-            ...parsed.totem,
-            unlockedTotems: parsed.totem.unlockedTotems || [],
-            activeBlessings: parsed.totem.activeBlessings || [],
-            availableBlessings: parsed.totem.availableBlessings || [],
-            offers: TOTEM_OFFERS,
-            offerCooldowns: parsed.totem.offerCooldowns || {},
-            accumulation: {
-              lastTick: Date.now(),
-              perSecond: getFaithPerSecond(state.buildings, parsed.totem.unlockedTotems || []),
-            },
-          }
-        : createInitialTotemState();
-      state.totem.maxFaith = getMaxFaith(state.buildings);
-      state.totem.availableBlessings = getAvailableBlessings(state.totem.unlockedTotems);
-      state.totem.accumulation.perSecond = getFaithPerSecond(state.buildings, state.totem.unlockedTotems);
-      if (state.totem.faith > state.totem.maxFaith) {
-        state.totem.faith = state.totem.maxFaith;
-      }
-
-      if (!state.unlockedBuildings.includes('totem_altar')) {
-        state.unlockedBuildings = [...state.unlockedBuildings, 'totem_altar'];
-      }
-
-      state.trainingQueue = (state.trainingQueue || []).map((q) => ({
-        ...q,
-        populationCost: q.populationCost || WARRIORS[q.type]?.populationCost || 1,
-      }));
-
-      const militaryPop = calculateMilitaryPopulation(state.warriors);
-      const trainingPop = calculateTrainingPopulation(state.trainingQueue);
-      const totalArmyPop = militaryPop + trainingPop;
-      if (state.population < totalArmyPop) {
-        state.population = totalArmyPop;
-        state.maxPopulation = Math.max(state.maxPopulation, state.population + 5);
-      }
-
-      state.nightRaid = parsed.nightRaid
-        ? {
-            ...createInitialNightRaidState(),
-            ...parsed.nightRaid,
-            reports: parsed.nightRaid.reports || [],
-            availableTraps: parsed.nightRaid.availableTraps || {
-              spike: 0,
-              fire: 0,
-              poison: 0,
-              net: 0,
-              boulder: 0,
-            },
-            placedTraps: parsed.nightRaid.placedTraps || [],
-            garrisonWarriors: parsed.nightRaid.garrisonWarriors || [],
-          }
-        : createInitialNightRaidState();
-
-      state.government = parsed.government
-        ? {
-            ...createInitialGovernmentState(state.day),
-            ...parsed.government,
-            chieftain: {
-              ...createInitialGovernmentState(state.day).chieftain,
-              ...parsed.government.chieftain,
-              heirs: parsed.government.chieftain?.heirs || [],
-            },
-            activePolicies: parsed.government.activePolicies || [],
-            completedPolicies: parsed.government.completedPolicies || [],
-            availablePolicies: parsed.government.availablePolicies || POLICIES.filter(p => p.tier === 1).map(p => p.id),
-            unlockedPolicyCategories: parsed.government.unlockedPolicyCategories || ['military', 'economy', 'culture'],
-          }
-        : createInitialGovernmentState(state.day);
-
-      state.buildQueue = parsed.buildQueue || [];
-      state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
-
-      return state;
+      return hydrateGameState(parsed);
     }
   } catch (e) {
     console.error('Failed to load save:', e);
@@ -1259,6 +1289,16 @@ interface GameStore extends GameState {
   saveGame: () => void;
   resetGame: () => void;
   setTribeName: (name: string) => void;
+
+  getSaveSlots: () => SaveSlotInfo[];
+  saveToSlot: (slotIndex: number, note?: string) => SaveSlotInfo | null;
+  loadFromSlot: (slotId: string) => LoadSaveResult;
+  deleteSaveSlot: (slotId: string) => boolean;
+  updateSlotNote: (slotId: string, note: string) => boolean;
+  rollbackSlot: (slotId: string) => LoadSaveResult;
+  hasBackup: (slotId: string) => boolean;
+  quickSaveGame: () => SaveSlotInfo | null;
+  markSlotCorrupted: (slotId: string, reason: string) => boolean;
 
   startCaravan: (routeId: string, cargo: Partial<Record<ResourceType, number>>, warriorIds: string[]) => { success: boolean; message: string };
   cancelCaravan: (caravanId: string) => boolean;
@@ -5897,6 +5937,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const toSave = { ...state, lastSave: Date.now() };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(toSave));
+      autoSave({ ...state, lastSave: Date.now() });
       set({ lastSave: Date.now() });
     } catch (e) {
       console.error('Failed to save:', e);
@@ -5905,10 +5946,81 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   resetGame: () => {
     localStorage.removeItem(SAVE_KEY);
+    localStorage.removeItem('beastmen_tribe_save_slots');
     set(createInitialState());
   },
 
   setTribeName: (name) => set({ tribeName: name }),
+
+  getSaveSlots: () => {
+    return getSaveSlotInfos();
+  },
+
+  saveToSlot: (slotIndex, note = '') => {
+    try {
+      const state = get();
+      const slot = saveToSlotManager(state, slotIndex, 'manual', note);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...state, lastSave: Date.now() }));
+      set({ lastSave: Date.now() });
+      return { id: slot.id, slotIndex: slot.slotIndex, type: slot.type, note: slot.note, tribeName: slot.tribeName, day: slot.day, population: slot.population, totalWins: slot.totalWins, totalLosses: slot.totalLosses, timestamp: slot.timestamp, version: slot.version, isCorrupted: slot.isCorrupted, corruptionReason: slot.corruptionReason };
+    } catch (e) {
+      console.error('Failed to save to slot:', e);
+      return null;
+    }
+  },
+
+  loadFromSlot: (slotId) => {
+    const result = loadSlot(slotId);
+    if (result.success && result.state) {
+      const hydrated = hydrateGameState(result.state);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...hydrated, lastSave: Date.now() }));
+      set(hydrated);
+    } else if (!result.success && result.state) {
+      const hydrated = hydrateGameState(result.state);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...hydrated, lastSave: Date.now() }));
+      set(hydrated);
+    }
+    return result;
+  },
+
+  deleteSaveSlot: (slotId) => {
+    return deleteSlot(slotId);
+  },
+
+  updateSlotNote: (slotId, note) => {
+    return updateSlotNoteManager(slotId, note);
+  },
+
+  rollbackSlot: (slotId) => {
+    const result = rollbackToBackup(slotId);
+    if (result.success && result.state) {
+      const hydrated = hydrateGameState(result.state);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...hydrated, lastSave: Date.now() }));
+      set(hydrated);
+    }
+    return result;
+  },
+
+  hasBackup: (slotId) => {
+    return getBackupExists(slotId);
+  },
+
+  quickSaveGame: () => {
+    try {
+      const state = get();
+      const slot = quickSave(state);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...state, lastSave: Date.now() }));
+      set({ lastSave: Date.now() });
+      return { id: slot.id, slotIndex: slot.slotIndex, type: slot.type, note: slot.note, tribeName: slot.tribeName, day: slot.day, population: slot.population, totalWins: slot.totalWins, totalLosses: slot.totalLosses, timestamp: slot.timestamp, version: slot.version, isCorrupted: slot.isCorrupted, corruptionReason: slot.corruptionReason };
+    } catch (e) {
+      console.error('Failed to quicksave:', e);
+      return null;
+    }
+  },
+
+  markSlotCorrupted: (slotId, reason) => {
+    return markSlotCorruptedManager(slotId, reason);
+  },
 
   getMaxCaravans: () => {
     const state = get();

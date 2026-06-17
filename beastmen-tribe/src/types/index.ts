@@ -1329,6 +1329,52 @@ export interface GovernmentState {
   prestige: number;
 }
 
+export const SAVE_VERSION = 1;
+
+export type SaveType = 'manual' | 'auto' | 'quicksave';
+
+export interface SaveSlot {
+  id: string;
+  slotIndex: number;
+  type: SaveType;
+  note: string;
+  tribeName: string;
+  day: number;
+  population: number;
+  totalWins: number;
+  totalLosses: number;
+  timestamp: number;
+  version: number;
+  data: GameState;
+  isCorrupted: boolean;
+  corruptionReason?: string;
+}
+
+export interface SaveSlotInfo {
+  id: string;
+  slotIndex: number;
+  type: SaveType;
+  note: string;
+  tribeName: string;
+  day: number;
+  population: number;
+  totalWins: number;
+  totalLosses: number;
+  timestamp: number;
+  version: number;
+  isCorrupted: boolean;
+  corruptionReason?: string;
+}
+
+export interface LoadSaveResult {
+  success: boolean;
+  state?: GameState;
+  error?: string;
+  warnings?: string[];
+  needsMigration?: boolean;
+  versionMismatch?: { saveVersion: number; currentVersion: number };
+}
+
 export interface GameState {
   tribeName: string;
   day: number;

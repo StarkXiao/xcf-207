@@ -17,7 +17,9 @@ export type BuildingType =
   | 'market'
   | 'smithy'
   | 'wall'
-  | 'hut';
+  | 'hut'
+  | 'warehouse'
+  | 'caravanserai';
 
 export interface BuildingConfig {
   id: BuildingType;
@@ -27,9 +29,55 @@ export interface BuildingConfig {
   baseCost: Partial<Resources>;
   baseProduction?: Partial<Resources>;
   baseCapacity?: number;
+  baseStorageCapacity?: Partial<Resources>;
   maxLevel: number;
   upgradeMultiplier: number;
   requires?: BuildingType;
+}
+
+export interface ResourceCapacity {
+  food: number;
+  wood: number;
+  stone: number;
+  gold: number;
+  iron: number;
+}
+
+export type TransportStatus = 'idle' | 'loading' | 'transporting' | 'unloading' | 'completed';
+
+export interface TransportTask {
+  id: string;
+  resource: ResourceType;
+  amount: number;
+  fromBuildingId: string;
+  toBuildingId: string;
+  status: TransportStatus;
+  progress: number;
+  totalTime: number;
+  speed: number;
+}
+
+export type SpoilageType = 'rot' | 'theft' | 'disaster' | 'pest';
+
+export interface SpoilageEvent {
+  id: string;
+  type: SpoilageType;
+  name: string;
+  icon: string;
+  description: string;
+  resource: ResourceType;
+  lossPercent: number;
+  lossAmount: number;
+  timestamp: number;
+  duration: number;
+  active: boolean;
+}
+
+export interface OfflineEarnings {
+  resources: Partial<Resources>;
+  duration: number;
+  collected: boolean;
+  timestamp: number;
 }
 
 export interface Building {
@@ -607,5 +655,11 @@ export interface GameState {
   diplomaticEventCooldown: number;
   allyReinforcements: AllyReinforcement[];
   totalTrades: number;
+  resourceCapacity: ResourceCapacity;
+  transportTasks: TransportTask[];
+  spoilageEvents: SpoilageEvent[];
+  spoilageCooldown: number;
+  offlineEarnings: OfflineEarnings | null;
+  lastOnlineTime: number;
   gameEnding: GameEnding | null;
 }

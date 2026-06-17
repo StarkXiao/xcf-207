@@ -92,6 +92,27 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     upgradeMultiplier: 1.5,
     baseCapacity: 10,
   },
+  warehouse: {
+    id: 'warehouse',
+    name: '大仓库',
+    description: '增加资源存储上限，每级大幅提升容量',
+    icon: '🏚️',
+    baseCost: { wood: 120, stone: 80, gold: 30 },
+    baseStorageCapacity: { food: 200, wood: 200, stone: 200, gold: 100, iron: 50 },
+    maxLevel: 10,
+    upgradeMultiplier: 1.7,
+    requires: 'townhall',
+  },
+  caravanserai: {
+    id: 'caravanserai',
+    name: '商队驿站',
+    description: '提升运输效率，解锁建筑间资源转运功能',
+    icon: '🐪',
+    baseCost: { wood: 150, stone: 100, gold: 80 },
+    maxLevel: 5,
+    upgradeMultiplier: 1.8,
+    requires: 'market',
+  },
 };
 
 export const getBuildingCost = (type: string, level: number): Partial<Record<string, number>> => {
@@ -113,4 +134,15 @@ export const getBuildingProduction = (type: string, level: number): Partial<Reco
     production[resource] = (amount as number) * level;
   }
   return production;
+};
+
+export const getBuildingStorageCapacity = (type: string, level: number): Partial<Record<string, number>> => {
+  const config = BUILDINGS[type];
+  if (!config || !config.baseStorageCapacity) return {};
+  const capacity: Partial<Record<string, number>> = {};
+  const multiplier = 1 + (level - 1) * 0.5;
+  for (const [resource, amount] of Object.entries(config.baseStorageCapacity)) {
+    capacity[resource] = Math.floor((amount as number) * multiplier);
+  }
+  return capacity;
 };

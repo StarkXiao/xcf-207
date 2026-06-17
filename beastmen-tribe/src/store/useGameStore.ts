@@ -32,7 +32,7 @@ import type {
   EndingType,
   GameEnding,
 } from '../types';
-import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
+import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
 import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
@@ -63,6 +63,13 @@ import {
   getDiplomaticEventInterval,
 } from '../data/diplomaticEvents';
 import { checkEndingConditions } from '../data/endings';
+import { SPOILAGE_COOLDOWN_MIN, SPOILAGE_COOLDOWN_MAX, generateSpoilageEvent } from '../data/spoilage';
+import type {
+  ResourceType,
+  ResourceCapacity,
+  TransportTask,
+  SpoilageEvent,
+} from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
@@ -138,6 +145,44 @@ const LOYALTY_DECAY_NO_FOOD = 0.5;
 const LOYALTY_RECOVERY_WELL_FED = 0.1;
 const EVENT_INTERVAL_MIN = 60;
 const EVENT_INTERVAL_MAX = 120;
+
+const BASE_RESOURCE_CAPACITY: ResourceCapacity = {
+  food: 500,
+  wood: 500,
+  stone: 300,
+  gold: 200,
+  iron: 100,
+};
+
+const TRANSPORT_BASE_TIME = 10;
+const MAX_TRANSPORT_TASKS = 5;
+const MAX_OFFLINE_HOURS = 8;
+const OFFLINE_EFFICIENCY = 0.7;
+
+const calculateResourceCapacity = (buildings: Building[], _technologies?: Tech[]): ResourceCapacity => {
+  const capacity: ResourceCapacity = { ...BASE_RESOURCE_CAPACITY };
+
+  for (const b of buildings) {
+    if (b.isBuilding) continue;
+    const storageCap = getBuildingStorageCapacity(b.type, b.level);
+    for (const [key, amount] of Object.entries(storageCap)) {
+      (capacity as any)[key] += amount as number;
+    }
+  }
+
+  const townhallBonus = buildings
+    .filter((b) => b.type === 'townhall' && !b.isBuilding)
+    .reduce((sum, b) => sum + b.level * 50, 0);
+  if (townhallBonus > 0) {
+    capacity.food += townhallBonus;
+    capacity.wood += townhallBonus;
+    capacity.stone += townhallBonus;
+    capacity.gold += Math.floor(townhallBonus * 0.5);
+    capacity.iron += Math.floor(townhallBonus * 0.3);
+  }
+
+  return capacity;
+};
 
 const createActiveTask = (configId: string, currentDay: number): ActiveTask => {
   const config = TASK_CONFIGS.find((c) => c.id === configId);
@@ -217,6 +262,7 @@ const createInitialState = (): GameState => ({
     gold: 120,
     iron: 0,
   },
+  resourceCapacity: { ...BASE_RESOURCE_CAPACITY },
   buildings: [
     {
       id: 'townhall-1',
@@ -229,6 +275,11 @@ const createInitialState = (): GameState => ({
       lastCollect: Date.now(),
     },
   ],
+  transportTasks: [],
+  spoilageEvents: [],
+  spoilageCooldown: SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
+  offlineEarnings: null,
+  lastOnlineTime: Date.now(),
   warriors: [],
   trainingQueue: [],
   invasion: null,
@@ -293,6 +344,12 @@ const loadSave = (): GameState => {
         allyReinforcements: parsed.allyReinforcements || [],
         totalTrades: parsed.totalTrades || 0,
         gameEnding: parsed.gameEnding || null,
+        resourceCapacity: parsed.resourceCapacity || { ...BASE_RESOURCE_CAPACITY },
+        transportTasks: parsed.transportTasks || [],
+        spoilageEvents: parsed.spoilageEvents || [],
+        spoilageCooldown: parsed.spoilageCooldown ?? SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
+        offlineEarnings: parsed.offlineEarnings || null,
+        lastOnlineTime: parsed.lastOnlineTime || Date.now(),
       };
       state.maxPopulation = calculateMaxPopulation(state.buildings, state.technologies);
       state.recruitEfficiency = calculateRecruitEfficiency(state.loyalty, state.activeEvents);
@@ -312,6 +369,8 @@ const loadSave = (): GameState => {
       state.weather = parsed.weather || 'sunny';
       state.seasonProgress = parsed.seasonProgress || 0;
       state.weatherDuration = parsed.weatherDuration ?? getWeatherDuration(state.weather);
+      state.resourceCapacity = calculateResourceCapacity(state.buildings, state.technologies);
+      
       if (state.taskChains.length > 0) {
         state.taskChains = state.taskChains.map((c) => ({
           ...c,
@@ -319,6 +378,52 @@ const loadSave = (): GameState => {
           failed: c.failed ?? c.tasks.some((t) => t.status === 'failed'),
         }));
       }
+
+      const now = Date.now();
+      const offlineMs = now - state.lastOnlineTime;
+      const offlineSeconds = Math.min(offlineMs / 1000, MAX_OFFLINE_HOURS * 3600);
+      
+      if (offlineSeconds > 60) {
+        const totalGain: Partial<Resources> = {};
+        const weatherEffects = calculateWeatherEffects(state.season, state.weather);
+        
+        for (const b of state.buildings) {
+          if (b.isBuilding) continue;
+          const production = getBuildingProduction(b.type, b.level);
+          if (Object.keys(production).length === 0) continue;
+
+          const prodBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
+          const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
+          const totalProdBonus = 1 + prodBonus + globalProdBonus;
+
+          for (const [key, rate] of Object.entries(production)) {
+            const baseAmount = (rate as number) * offlineSeconds * totalProdBonus * OFFLINE_EFFICIENCY;
+            const weatherMod = weatherEffects.resourceModifiers[key as keyof Resources] || 0;
+            const amount = baseAmount * (1 + weatherMod);
+            totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
+          }
+        }
+
+        for (const key of Object.keys(totalGain) as (keyof Resources)[]) {
+          const cap = state.resourceCapacity[key] - state.resources[key];
+          if (cap > 0) {
+            totalGain[key] = Math.min(totalGain[key]!, cap);
+          } else {
+            delete totalGain[key];
+          }
+        }
+
+        if (Object.keys(totalGain).length > 0) {
+          state.offlineEarnings = {
+            resources: totalGain,
+            duration: offlineSeconds,
+            collected: false,
+            timestamp: now,
+          };
+        }
+      }
+
+      state.lastOnlineTime = now;
       return state;
     }
   } catch (e) {
@@ -387,6 +492,18 @@ interface GameStore extends GameState {
   checkForEnding: () => EndingType | null;
   triggerEnding: (endingType: EndingType) => void;
 
+  calculateResourceCapacity: () => ResourceCapacity;
+  startTransport: (resource: ResourceType, amount: number, fromBuildingId: string, toBuildingId: string) => boolean;
+  cancelTransport: (taskId: string) => boolean;
+  processTransportTick: (delta: number) => void;
+  
+  processSpoilageTick: (delta: number) => void;
+  dismissSpoilageEvent: (eventId: string) => void;
+  
+  collectOfflineEarnings: () => boolean;
+  
+  getStorageUsagePercent: (resource: ResourceType) => number;
+
   tick: (delta: number) => void;
   saveGame: () => void;
   resetGame: () => void;
@@ -418,7 +535,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const newResources = { ...state.resources };
     for (const [key, amount] of Object.entries(gain)) {
-      newResources[key as keyof Resources] += amount as number;
+      const resourceKey = key as keyof Resources;
+      const capped = Math.min(
+        newResources[resourceKey] + (amount as number),
+        state.resourceCapacity[resourceKey]
+      );
+      newResources[resourceKey] = Math.max(0, capped);
     }
     set({ resources: newResources });
   },
@@ -452,12 +574,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (type === 'barracks') {
       if (!newUnlocked.includes('smithy')) newUnlocked.push('smithy');
     }
+    if (type === 'market') {
+      if (!newUnlocked.includes('warehouse')) newUnlocked.push('warehouse');
+      if (!newUnlocked.includes('caravanserai')) newUnlocked.push('caravanserai');
+    }
 
     const newBuildings = [...state.buildings, newBuilding];
     set({
       buildings: newBuildings,
       unlockedBuildings: newUnlocked,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
+      resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
     });
 
     state.updateTaskProgress('build_buildings', 1, type);
@@ -503,6 +630,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       buildings: newBuildings,
       unlockedBuildings: newUnlockedBuildings,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
+      resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
     });
 
     state.updateTaskProgress('upgrade_buildings', 1);
@@ -2255,6 +2383,158 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  calculateResourceCapacity: () => {
+    const state = get();
+    return calculateResourceCapacity(state.buildings, state.technologies);
+  },
+
+  getStorageUsagePercent: (resource) => {
+    const state = get();
+    const capacity = (state.resourceCapacity as any)[resource];
+    if (capacity <= 0) return 100;
+    return Math.min(100, ((state.resources as any)[resource] / capacity) * 100);
+  },
+
+  startTransport: (resource, amount, fromBuildingId, toBuildingId) => {
+    const state = get();
+    
+    if (state.transportTasks.length >= MAX_TRANSPORT_TASKS) return false;
+    if (amount <= 0) return false;
+    
+    const hasCaravanserai = state.buildings.some((b) => b.type === 'caravanserai' && !b.isBuilding);
+    if (!hasCaravanserai) return false;
+
+    const fromBuilding = state.buildings.find((b) => b.id === fromBuildingId);
+    const toBuilding = state.buildings.find((b) => b.id === toBuildingId);
+    if (!fromBuilding || !toBuilding) return false;
+
+    if ((state.resources as any)[resource] < amount) return false;
+
+    const caravanseraiLevel = state.buildings
+      .filter((b) => b.type === 'caravanserai' && !b.isBuilding)
+      .reduce((max, b) => Math.max(max, b.level), 0);
+    const speedBonus = 1 + caravanseraiLevel * 0.2;
+    const totalTime = TRANSPORT_BASE_TIME / speedBonus;
+
+    const transportTask: TransportTask = {
+      id: generateId(),
+      resource,
+      amount,
+      fromBuildingId,
+      toBuildingId,
+      status: 'transporting',
+      progress: 0,
+      totalTime,
+      speed: speedBonus,
+    };
+
+    state.spendResources({ [resource]: amount });
+    set({ transportTasks: [...state.transportTasks, transportTask] });
+
+    return true;
+  },
+
+  cancelTransport: (taskId) => {
+    const state = get();
+    const task = state.transportTasks.find((t) => t.id === taskId);
+    if (!task) return false;
+
+    const refundAmount = Math.floor(task.amount * 0.8);
+    state.addResources({ [task.resource]: refundAmount });
+    set({
+      transportTasks: state.transportTasks.filter((t) => t.id !== taskId),
+    });
+
+    return true;
+  },
+
+  processTransportTick: (delta) => {
+    const state = get();
+    if (state.transportTasks.length === 0) return;
+
+    const completedTasks: TransportTask[] = [];
+    const updatedTasks: TransportTask[] = [];
+
+    for (const task of state.transportTasks) {
+      const newProgress = task.progress + delta;
+      if (newProgress >= task.totalTime) {
+        completedTasks.push(task);
+      } else {
+        updatedTasks.push({ ...task, progress: newProgress });
+      }
+    }
+
+    if (completedTasks.length > 0) {
+      for (const task of completedTasks) {
+        state.addResources({ [task.resource]: task.amount });
+      }
+      set({ transportTasks: updatedTasks });
+    } else if (updatedTasks.length !== state.transportTasks.length) {
+      set({ transportTasks: updatedTasks });
+    }
+  },
+
+  processSpoilageTick: (delta) => {
+    const state = get();
+    
+    let newCooldown = state.spoilageCooldown - delta;
+    let newEvents = [...state.spoilageEvents];
+
+    if (newCooldown <= 0 && newEvents.length < 2) {
+      const eventData = generateSpoilageEvent(Math.floor(state.day), state.resources as any);
+      if (eventData) {
+        const newResources = { ...state.resources };
+        (newResources as any)[eventData.resource] = Math.max(0, (newResources as any)[eventData.resource] - eventData.lossAmount);
+
+        const spoilageEvent: SpoilageEvent = {
+          id: generateId(),
+          type: eventData.type,
+          name: eventData.name,
+          icon: eventData.icon,
+          description: eventData.description,
+          resource: eventData.resource,
+          lossPercent: eventData.lossPercent,
+          lossAmount: eventData.lossAmount,
+          timestamp: Date.now(),
+          duration: 10,
+          active: true,
+        };
+
+        newEvents.push(spoilageEvent);
+        set({ resources: newResources, spoilageEvents: newEvents });
+      }
+      newCooldown = SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN);
+    }
+
+    newEvents = newEvents
+      .map((e) => ({ ...e, duration: e.duration - delta }))
+      .filter((e) => e.duration > 0);
+
+    set({
+      spoilageCooldown: newCooldown,
+      spoilageEvents: newEvents,
+    });
+  },
+
+  dismissSpoilageEvent: (eventId) => {
+    const state = get();
+    set({
+      spoilageEvents: state.spoilageEvents.filter((e) => e.id !== eventId),
+    });
+  },
+
+  collectOfflineEarnings: () => {
+    const state = get();
+    if (!state.offlineEarnings || state.offlineEarnings.collected) return false;
+
+    state.addResources(state.offlineEarnings.resources);
+    set({
+      offlineEarnings: { ...state.offlineEarnings, collected: true },
+    });
+
+    return true;
+  },
+
   checkForEnding: () => {
     const state = get();
     return checkEndingConditions(state);
@@ -2351,19 +2631,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processTaskTick(delta);
     state.processDiplomaticTick(delta);
     state.processAllyReinforcementsTick(delta);
+    state.processTransportTick(delta);
+    state.processSpoilageTick(delta);
 
     const ending = state.checkForEnding();
     if (ending) {
       state.triggerEnding(ending);
     }
 
+    let capacityChanged = false;
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {
         const newProgress = Math.min(100, b.buildProgress + delta * 10);
-        return { ...b, buildProgress: newProgress, isBuilding: newProgress < 100 };
+        const wasBuilding = b.isBuilding;
+        const isNowBuilding = newProgress < 100;
+        if (wasBuilding && !isNowBuilding) {
+          capacityChanged = true;
+        }
+        return { ...b, buildProgress: newProgress, isBuilding: isNowBuilding };
       }
       return b;
     });
+
+    if (capacityChanged) {
+      set({
+        resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
+      });
+    }
 
     let newInvasion = state.invasion;
     if (newInvasion?.isActive) {
@@ -2380,6 +2674,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       buildings: newBuildings,
       day: state.day + delta / 60,
       invasion: newInvasion,
+      lastOnlineTime: Date.now(),
     });
   },
 

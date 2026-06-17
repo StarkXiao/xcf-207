@@ -3577,3 +3577,358 @@ body {
   font-size: 16px;
   padding: 14px 24px;
 }
+
+.storage-panel {
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(139, 90, 43, 0.5);
+  }
+
+  .btn-close {
+    background: none;
+    border: none;
+    color: #f5e6d3;
+    font-size: 24px;
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.2s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+  }
+
+  .btn-close-small {
+    background: none;
+    border: none;
+    color: #f5e6d3;
+    font-size: 18px;
+    cursor: pointer;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.2s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+  }
+
+  .section {
+    margin-bottom: 20px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffd700;
+    margin-bottom: 10px;
+    padding-left: 8px;
+    border-left: 3px solid #8b5a2b;
+  }
+
+  .offline-earnings-banner {
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.2) 0%, rgba(56, 142, 60, 0.2) 100%);
+    border: 2px solid #4caf50;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+
+  .offline-title {
+    font-size: 15px;
+    font-weight: bold;
+    color: #81c784;
+    margin-bottom: 6px;
+  }
+
+  .offline-duration {
+    font-size: 12px;
+    color: #a5d6a7;
+    margin-bottom: 10px;
+  }
+
+  .offline-resources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .offline-resource-item {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #a5d6a7;
+  }
+
+  .capacity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .capacity-item {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border: 1px solid rgba(139, 90, 43, 0.3);
+  }
+
+  .capacity-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .capacity-icon {
+    font-size: 18px;
+  }
+
+  .capacity-name {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: #d4a574;
+  }
+
+  .capacity-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .capacity-bar {
+    height: 6px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .capacity-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .warehouse-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .warehouse-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border: 1px solid rgba(139, 90, 43, 0.3);
+  }
+
+  .warehouse-icon {
+    font-size: 28px;
+  }
+
+  .warehouse-info {
+    flex: 1;
+  }
+
+  .warehouse-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #f5e6d3;
+    margin-bottom: 2px;
+  }
+
+  .warehouse-capacity {
+    font-size: 11px;
+    color: #a1887f;
+  }
+
+  .storage-bonus {
+    font-size: 12px;
+    color: #a1887f;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+    margin-top: 8px;
+
+    .bonus-item {
+      margin-right: 8px;
+    }
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 20px;
+    color: #8d6e63;
+    font-size: 13px;
+  }
+
+  .transport-form {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(139, 90, 43, 0.3);
+  }
+
+  .form-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+
+    label {
+      font-size: 13px;
+      color: #d4a574;
+      min-width: 70px;
+    }
+
+    select,
+    input {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid #5d4037;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.3);
+      color: #f5e6d3;
+      font-size: 13px;
+
+      &:focus {
+        outline: none;
+        border-color: #ffd700;
+      }
+    }
+
+    input[type="number"] {
+      width: 100%;
+    }
+  }
+
+  .transport-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .transport-item {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border: 1px solid rgba(139, 90, 43, 0.3);
+  }
+
+  .transport-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .transport-resource {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f5e6d3;
+  }
+
+  .transport-status {
+    font-size: 12px;
+    color: #81c784;
+    background: rgba(76, 175, 80, 0.2);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  .transport-bar {
+    height: 6px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .transport-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4caf50 0%, #81c784 100%);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .transport-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: #a1887f;
+  }
+
+  .spoilage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .spoilage-item {
+    background: linear-gradient(135deg, rgba(229, 57, 53, 0.15) 0%, rgba(198, 40, 40, 0.15) 100%);
+    border: 1px solid rgba(229, 57, 53, 0.5);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .spoilage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .spoilage-icon {
+    font-size: 20px;
+  }
+
+  .spoilage-name {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ef9a9a;
+  }
+
+  .spoilage-desc {
+    font-size: 12px;
+    color: #e57373;
+    margin-bottom: 8px;
+  }
+
+  .spoilage-loss {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ff8a80;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 6px 10px;
+    border-radius: 6px;
+    display: inline-block;
+  }
+}

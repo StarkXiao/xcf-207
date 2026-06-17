@@ -46,7 +46,7 @@ import type {
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity, checkBuildingRequirements as checkBuildReqs, getBuildTime, getUpgradeTime, getProductionEstimate as getProdEstimate, getUpgradeHints as getUpgHints, getUnlockableBuildings as getUnlockableBldgs, getRequirementDescription } from '../data/buildings';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
-import { generateInvasion, ENEMIES } from '../data/enemies';
+import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
 import { generateTrades } from '../data/trades';
 import { triggerRandomEvent } from '../data/events';
 import {
@@ -161,6 +161,10 @@ import type {
   BuildingRequirement,
   BuildingUpgradeHint,
   ProductionEstimate,
+  BossSkillWarning,
+  WallDurability,
+  RewardTier,
+  FailureCompensation,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -1492,29 +1496,63 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const enemies: Enemy[] = [];
     const enemyConfig = ENEMIES[invader.type];
+    const bossConfig = getBossForWave(wave);
+    const bossWave = isBossWave(wave);
 
-    for (let i = 0; i < invader.count; i++) {
-      const position: PositionRow = i === 0 ? 'front' : i < Math.ceil(invader.count * 0.6) ? 'middle' : 'back';
+    if (bossWave && bossConfig) {
+      const bossScale = 1 + wave * 0.08;
       enemies.push({
         id: generateId(),
-        type: invader.type as any,
-        hp: Math.floor(invader.hp * statMultiplier),
-        maxHp: Math.floor(invader.maxHp * statMultiplier),
-        attack: Math.floor(invader.attack * statMultiplier),
-        defense: Math.floor(invader.defense * statMultiplier),
-        position: enemyConfig?.preferredPosition || position,
-        morale: 60 + Math.floor(Math.random() * 30),
+        type: bossConfig.minionType as any,
+        hp: Math.floor(bossConfig.hp * bossScale * statMultiplier),
+        maxHp: Math.floor(bossConfig.hp * bossScale * statMultiplier),
+        attack: Math.floor(bossConfig.attack * bossScale * statMultiplier),
+        defense: Math.floor(bossConfig.defense * bossScale * statMultiplier),
+        position: 'front',
+        morale: 80 + Math.floor(Math.random() * 15),
       });
+      const minionBase = ENEMIES[bossConfig.minionType];
+      for (let i = 0; i < bossConfig.minionCount; i++) {
+        const position: PositionRow = i < Math.ceil(bossConfig.minionCount * 0.5) ? 'front' : 'middle';
+        enemies.push({
+          id: generateId(),
+          type: bossConfig.minionType as any,
+          hp: Math.floor(minionBase.hp * 0.8 * bossScale * statMultiplier),
+          maxHp: Math.floor(minionBase.hp * 0.8 * bossScale * statMultiplier),
+          attack: Math.floor(minionBase.attack * 0.8 * bossScale * statMultiplier),
+          defense: Math.floor(minionBase.defense * 0.8 * bossScale * statMultiplier),
+          position,
+          morale: 60 + Math.floor(Math.random() * 20),
+        });
+      }
+    } else {
+      for (let i = 0; i < invader.count; i++) {
+        const position: PositionRow = i === 0 ? 'front' : i < Math.ceil(invader.count * 0.6) ? 'middle' : 'back';
+        enemies.push({
+          id: generateId(),
+          type: invader.type as any,
+          hp: Math.floor(invader.hp * statMultiplier),
+          maxHp: Math.floor(invader.maxHp * statMultiplier),
+          attack: Math.floor(invader.attack * statMultiplier),
+          defense: Math.floor(invader.defense * statMultiplier),
+          position: enemyConfig?.preferredPosition || position,
+          morale: 60 + Math.floor(Math.random() * 30),
+        });
+      }
     }
 
     const scaledRewards: Partial<Resources> = {};
-    for (const [key, amount] of Object.entries(invader.reward)) {
+    const rewardSource = bossWave && bossConfig ? bossConfig.reward : invader.reward;
+    for (const [key, amount] of Object.entries(rewardSource)) {
       scaledRewards[key as keyof Resources] = Math.floor((amount as number) * statMultiplier);
     }
 
     const armyMorale = state.warriors.length > 0
       ? Math.floor(state.warriors.reduce((s, w) => s + w.morale, 0) / state.warriors.length)
       : 50;
+
+    const wallDurability = calcWallDurability(state.buildings, state.technologies);
+    const tieredRewards = calculateTieredRewards(wave, scaledRewards, bossWave);
 
     const invasion: Invasion = {
       id: generateId(),
@@ -1525,7 +1563,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       rewards: scaledRewards,
       result: 'pending',
       armyMorale,
-      enemyMorale: 65,
+      enemyMorale: bossWave ? 75 : 65,
+      isBossWave: bossWave,
+      bossId: bossWave && bossConfig ? bossConfig.id : undefined,
+      bossSkillWarnings: [],
+      wallDurability,
+      tieredRewards,
+      achievedTier: null,
+      failureCompensation: null,
+      skillCooldowns: {},
     };
 
     set({ invasion });
@@ -1548,6 +1594,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
+    let wallDurability = { ...invasion.wallDurability };
+    const skillCooldowns = { ...invasion.skillCooldowns };
+    let bossSkillWarnings: BossSkillWarning[] = [...invasion.bossSkillWarnings];
+    const bossConfig = invasion.isBossWave && invasion.bossId ? BOSSES[invasion.bossId] : null;
 
     for (const reinforcement of state.allyReinforcements) {
       for (const unit of reinforcement.warriors) {
@@ -1619,19 +1669,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let armyMorale = invasion.armyMorale;
     let enemyMorale = invasion.enemyMorale;
 
-    addLog({
-      type: 'system',
-      round: 0,
-      actor: '系统',
-      actorIcon: '📜',
-      message: `⚔️ 第 ${invasion.wave} 波入侵开始！敌军：${enemies.map((e) => `${ENEMIES[e.type].icon}${ENEMIES[e.type].name}`).join('、')}`,
-    });
+    if (invasion.isBossWave && bossConfig) {
+      addLog({
+        type: 'system',
+        round: 0,
+        actor: '系统',
+        actorIcon: '👹',
+        message: `👹 BOSS战！${bossConfig.icon}${bossConfig.name} 率领部下入侵！`,
+      });
+      for (const skill of bossConfig.skills) {
+        addLog({
+          type: 'system',
+          round: 0,
+          actor: bossConfig.name,
+          actorIcon: skill.icon,
+          message: `⚠️ 技能预警：${skill.icon}${skill.name} - ${skill.description}`,
+        });
+      }
+    } else {
+      addLog({
+        type: 'system',
+        round: 0,
+        actor: '系统',
+        actorIcon: '📜',
+        message: `⚔️ 第 ${invasion.wave} 波入侵开始！敌军：${enemies.map((e) => `${ENEMIES[e.type].icon}${ENEMIES[e.type].name}`).join('、')}`,
+      });
+    }
     addLog({
       type: 'system',
       round: 0,
       actor: '系统',
       actorIcon: '🛡️',
-      message: `城防加成 +${wallDefense} | 忠诚加成 +${loyaltyBonus} | 我军士气 ${armyMorale} | 敌军士气 ${enemyMorale}`,
+      message: `城防加成 +${wallDefense} | 城墙耐久 ${wallDurability.currentHp}/${wallDurability.maxHp} | 忠诚加成 +${loyaltyBonus} | 我军士气 ${armyMorale} | 敌军士气 ${enemyMorale}`,
     });
 
     const summary: BattleSummary = {
@@ -1671,6 +1740,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     let round = 0;
+    const wallDamagePerRound = wallDurability.level > 0 ? Math.max(1, enemies.length) : 0;
+
     while (myWarriors.some((w) => w.hp > 0) && enemies.some((e) => e.hp > 0) && round < 25) {
       round++;
       addLog({
@@ -1680,6 +1751,131 @@ export const useGameStore = create<GameStore>((set, get) => ({
         actorIcon: '⏳',
         message: `━━━ 回合 ${round} ━━━`,
       });
+
+      if (invasion.isBossWave && bossConfig && enemies.length > 0) {
+        const boss = enemies[0];
+        if (boss.hp > 0) {
+          for (const skill of bossConfig.skills) {
+            const cd = skillCooldowns[skill.id] || 0;
+            if (cd > 0) {
+              skillCooldowns[skill.id] = cd - 1;
+            }
+          }
+
+          const warningsToRemove: number[] = [];
+          for (let wi = 0; wi < bossSkillWarnings.length; wi++) {
+            const warning = bossSkillWarnings[wi];
+            warning.remainingRounds--;
+            if (warning.remainingRounds <= 0) {
+              warningsToRemove.push(wi);
+              const skill = warning.skill;
+              addLog({
+                type: 'system',
+                round,
+                actor: bossConfig.name,
+                actorIcon: skill.icon,
+                message: `💥 ${bossConfig.icon}${bossConfig.name} 释放 ${skill.icon}${skill.name}！`,
+              });
+
+              switch (skill.type) {
+                case 'aoe': {
+                  if (skill.damage) {
+                    const frontWarriors = myWarriors.filter(w => w.hp > 0 && w.position === 'front');
+                    for (const w of frontWarriors) {
+                      const aoeDmg = Math.floor(skill.damage * (0.8 + Math.random() * 0.4));
+                      w.hp -= aoeDmg;
+                      summary.totalDamageTaken += aoeDmg;
+                      if (w.hp <= 0) {
+                        w.hp = 0;
+                        armyMorale = Math.max(0, armyMorale - 3);
+                        summary.moraleChanges -= 3;
+                        addLog({ type: 'death', round, actor: bossConfig.name, actorIcon: skill.icon, target: WARRIORS[w.type].name, targetIcon: WARRIORS[w.type].icon, message: `☠️ ${WARRIORS[w.type].icon}${WARRIORS[w.type].name} 被${skill.name}击杀！` });
+                      }
+                    }
+                    addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: skill.icon, message: `🔥 ${skill.name}对前排造成范围伤害！` });
+                  }
+                  break;
+                }
+                case 'wall_breaker': {
+                  if (skill.wallDamage) {
+                    wallDurability.currentHp = Math.max(0, wallDurability.currentHp - skill.wallDamage);
+                    addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: skill.icon, message: `🌋 ${skill.name}对城墙造成 ${skill.wallDamage} 伤害！城墙耐久: ${wallDurability.currentHp}/${wallDurability.maxHp}` });
+                  }
+                  if (skill.damage) {
+                    const dmgTarget = findTarget(myWarriors);
+                    if (dmgTarget) {
+                      dmgTarget.hp -= skill.damage;
+                      summary.totalDamageTaken += skill.damage;
+                      if (dmgTarget.hp <= 0) {
+                        dmgTarget.hp = 0;
+                        addLog({ type: 'death', round, actor: bossConfig.name, actorIcon: skill.icon, target: WARRIORS[dmgTarget.type].name, targetIcon: WARRIORS[dmgTarget.type].icon, message: `☠️ ${WARRIORS[dmgTarget.type].icon}${WARRIORS[dmgTarget.type].name} 被${skill.name}击杀！` });
+                      }
+                    }
+                  }
+                  break;
+                }
+                case 'heal_self': {
+                  if (skill.healPercent) {
+                    const healAmount = Math.floor(boss.maxHp * skill.healPercent / 100);
+                    boss.hp = Math.min(boss.maxHp, boss.hp + healAmount);
+                    addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: skill.icon, message: `💊 ${bossConfig.name}恢复了 ${healAmount} 生命！` });
+                  }
+                  break;
+                }
+                case 'buff_minions': {
+                  for (let mi = 1; mi < enemies.length; mi++) {
+                    const minion = enemies[mi];
+                    if (minion.hp > 0) {
+                      if (skill.attackBoost) minion.attack = Math.floor(minion.attack * (1 + skill.attackBoost));
+                      if (skill.defenseBoost) minion.defense = Math.floor(minion.defense * (1 + skill.defenseBoost));
+                    }
+                  }
+                  addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: skill.icon, message: `📯 ${bossConfig.name}的${skill.name}强化了所有随从！` });
+                  break;
+                }
+                case 'stun': {
+                  if (skill.stunRounds) {
+                    const aliveWarriors = myWarriors.filter(w => w.hp > 0);
+                    const stunCount = Math.min(2, aliveWarriors.length);
+                    for (let si = 0; si < stunCount; si++) {
+                      const idx = Math.floor(Math.random() * aliveWarriors.length);
+                      const stunned = aliveWarriors[idx];
+                      stunned.morale = Math.max(10, stunned.morale - 15);
+                      summary.moraleChanges -= 5;
+                      addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: skill.icon, target: WARRIORS[stunned.type].name, targetIcon: WARRIORS[stunned.type].icon, message: `🌀 ${WARRIORS[stunned.type].icon}${WARRIORS[stunned.type].name} 被${skill.name}眩晕！士气骤降` });
+                      aliveWarriors.splice(idx, 1);
+                    }
+                  }
+                  break;
+                }
+              }
+
+              skillCooldowns[skill.id] = skill.cooldown;
+            }
+          }
+          for (let ri = warningsToRemove.length - 1; ri >= 0; ri--) {
+            bossSkillWarnings.splice(warningsToRemove[ri], 1);
+          }
+
+          if (round > 1) {
+            for (const skill of bossConfig.skills) {
+              const cd = skillCooldowns[skill.id] || 0;
+              if (cd <= 0) {
+                const alreadyWarning = bossSkillWarnings.some(w => w.skill.id === skill.id);
+                if (!alreadyWarning && Math.random() < 0.35) {
+                  bossSkillWarnings.push({ skill, remainingRounds: skill.warningRounds });
+                  addLog({ type: 'system', round, actor: bossConfig.name, actorIcon: '⚠️', message: `⚠️ 预警！${skill.icon}${skill.name}将在 ${skill.warningRounds} 回合后释放！${skill.description}` });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const wallDurabilityRatio = wallDurability.maxHp > 0 ? wallDurability.currentHp / wallDurability.maxHp : 0;
+      const wallDefenseBonus = wallDurabilityRatio > 0.7 ? 1.0 : wallDurabilityRatio > 0.3 ? 0.7 : wallDurabilityRatio > 0 ? 0.4 : 0;
+
+      const effectiveWallDefense = Math.floor(wallDefense * wallDefenseBonus);
 
       const positionOrder: PositionRow[] = ['back', 'middle', 'front'];
       for (const pos of positionOrder) {
@@ -1821,7 +2017,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           const counterBonus = getCounterBonus(eConfig.unitClass, wConfig.unitClass);
           const moraleAtk = getMoraleMultiplier(enemyMorale);
           const positionDefPenalty = target.position === 'front' ? 1 : target.position === 'middle' ? 1.1 : 1.25;
-          const wallProtection = target.position === 'front' ? wallDefense * 0.1 : target.position === 'middle' ? wallDefense * 0.05 : 0;
+          const wallProtection = target.position === 'front' ? effectiveWallDefense * 0.1 : target.position === 'middle' ? effectiveWallDefense * 0.05 : 0;
 
           const baseDamage = enemy.attack * moraleAtk * positionDefPenalty;
           const damageBeforeCounter = Math.max(1, baseDamage - target.defense * 0.5 - wallProtection);
@@ -1862,6 +2058,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
               message: `☠️ ${wConfig.icon}${wConfig.name} 阵亡！士气 -5`,
             });
           }
+        }
+      }
+
+      if (wallDurability.currentHp > 0 && enemies.some(e => e.hp > 0)) {
+        const dmgToWall = Math.max(1, Math.floor(wallDamagePerRound * (0.5 + Math.random() * 0.5)));
+        wallDurability.currentHp = Math.max(0, wallDurability.currentHp - dmgToWall);
+        if (wallDurability.currentHp <= 0) {
+          addLog({ type: 'system', round, actor: '城墙', actorIcon: '🧱', message: `💥 城墙被攻破！城防加成归零！` });
         }
       }
 
@@ -1908,28 +2112,114 @@ export const useGameStore = create<GameStore>((set, get) => ({
       message: endMsg,
     });
 
-    const newLoyalty = Math.min(100, state.loyalty + (victory ? 5 : -8));
-    const newPopulation = Math.max(0, state.population + (victory ? 0 : -1));
+    const enemiesDefeated = invasion.enemies.length - enemies.length;
+    const totalEnemies = invasion.enemies.length;
+    const warriorsLost = state.warriors.length - myWarriors.length;
+    const wallHpRatio = wallDurability.maxHp > 0 ? wallDurability.currentHp / wallDurability.maxHp : 0;
+
+    let achievedTier: RewardTier | null = null;
+    let tieredRewardResources: Partial<Resources> = {};
+    let tieredLoyaltyBonus = 0;
+    let tieredExpBonus = 0;
 
     if (victory) {
-      state.addResources(invasion.rewards);
-      const rewardStr = Object.entries(invasion.rewards)
-        .map(([k, v]) => `${(state.resources as any)[k]?.icon || '📦'}${k}+${v}`)
+      const killRatio = totalEnemies > 0 ? enemiesDefeated / totalEnemies : 0;
+      const allSurvived = warriorsLost === 0;
+
+      if (allSurvived && wallHpRatio > 0.7) {
+        achievedTier = 'perfect';
+      } else if (killRatio >= 0.5 && wallHpRatio > 0.3) {
+        achievedTier = 'performance';
+      } else {
+        achievedTier = 'base';
+      }
+
+      const tierReward = invasion.tieredRewards.find(t => t.tier === achievedTier);
+      if (tierReward) {
+        tieredRewardResources = tierReward.resources;
+        tieredLoyaltyBonus = tierReward.loyaltyBonus;
+        tieredExpBonus = tierReward.expBonus;
+      }
+
+      const combinedRewards: Partial<Resources> = {};
+      for (const [key, amount] of Object.entries(invasion.rewards)) {
+        combinedRewards[key as keyof Resources] = (amount as number) + (tieredRewardResources[key as keyof Resources] || 0);
+      }
+      state.addResources(combinedRewards);
+
+      const rewardStr = Object.entries(combinedRewards)
+        .filter(([, v]) => (v as number) > 0)
+        .map(([k, v]) => `${k}+${v}`)
         .join(', ');
       addLog({
         type: 'system',
         round,
         actor: '战利品',
         actorIcon: '🎁',
-        message: `🎁 获得奖励：${rewardStr}`,
+        message: `🎁 获得奖励：${rewardStr} | ${achievedTier === 'perfect' ? '🥇完美' : achievedTier === 'performance' ? '🥈表现' : '🥉基础'}结算`,
       });
 
-      const expGain = invasion.wave * 15;
+      const expGain = invasion.wave * 15 + tieredExpBonus;
       for (const w of myWarriors) {
         w.exp += expGain;
         w.morale = Math.min(100, w.morale + 10);
       }
-    } else {
+    }
+
+    let failureCompensation: FailureCompensation | null = null;
+    let compensationLoyaltyMitigation = 0;
+
+    if (!victory) {
+      failureCompensation = calculateFailureCompensation(
+        invasion.wave,
+        summary.totalDamageDealt,
+        enemiesDefeated,
+        totalEnemies,
+        round,
+        wallDurability.currentHp,
+        wallDurability.maxHp
+      );
+
+      if (Object.values(failureCompensation.resources).some(v => (v as number) > 0)) {
+        state.addResources(failureCompensation.resources);
+        const compStr = Object.entries(failureCompensation.resources)
+          .filter(([, v]) => (v as number) > 0)
+          .map(([k, v]) => `${k}+${v}`)
+          .join(', ');
+        addLog({
+          type: 'system',
+          round,
+          actor: '补偿',
+          actorIcon: '🩹',
+          message: `🩹 失败补偿：${compStr}（表现补偿率 ${Math.floor(failureCompensation.warriorRecoveryRate * 100)}%）`,
+        });
+      }
+
+      if (failureCompensation.warriorRecoveryRate > 0) {
+        const deadWarriors = state.warriors.filter(w => !myWarriors.some(mw => mw.id === w.id));
+        const recoverCount = Math.floor(deadWarriors.length * failureCompensation.warriorRecoveryRate);
+        for (let i = 0; i < recoverCount && i < deadWarriors.length; i++) {
+          const recovered = deadWarriors[i];
+          recovered.hp = Math.floor(recovered.maxHp * 0.3);
+          recovered.morale = Math.max(20, recovered.morale - 20);
+          myWarriors.push(recovered);
+          addLog({
+            type: 'system',
+            round,
+            actor: '伤员恢复',
+            actorIcon: '💊',
+            message: `💊 ${WARRIORS[recovered.type]?.icon || ''}${WARRIORS[recovered.type]?.name || ''} 被救回，但伤势严重`,
+          });
+        }
+      }
+
+      compensationLoyaltyMitigation = failureCompensation.loyaltyMitigation;
+    }
+
+    const newLoyalty = Math.min(100, state.loyalty + (victory ? 5 + tieredLoyaltyBonus : -8 + compensationLoyaltyMitigation));
+    const newPopulation = Math.max(0, state.population + (victory ? 0 : -1));
+
+    if (!victory) {
       for (const w of myWarriors) {
         w.morale = Math.max(20, w.morale - 15);
       }
@@ -1938,7 +2228,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         round,
         actor: '系统',
         actorIcon: '⚠️',
-        message: `⚠️ 人口 ${state.population} → ${newPopulation}，忠诚 ${state.loyalty} → ${newLoyalty}`,
+        message: `⚠️ 人口 ${state.population} → ${newPopulation}，忠诚 ${state.loyalty} → ${newLoyalty}${compensationLoyaltyMitigation > 0 ? `（补偿减免 +${compensationLoyaltyMitigation}）` : ''}`,
       });
     }
 
@@ -1953,6 +2243,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         battleSummary: summary,
         armyMorale,
         enemyMorale,
+        isBossWave: invasion.isBossWave,
+        bossId: invasion.bossId,
+        bossSkillWarnings: [],
+        wallDurability,
+        tieredRewards: invasion.tieredRewards,
+        achievedTier,
+        failureCompensation,
+        skillCooldowns,
       },
       totalWins: state.totalWins + (victory ? 1 : 0),
       totalLosses: state.totalLosses + (victory ? 0 : 1),

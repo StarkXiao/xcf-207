@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useGameStore } from '../store/useGameStore';
-import { ENEMIES } from '../data/enemies';
+import { ENEMIES, BOSSES, BOSS_WAVE_INTERVAL, isBossWave as checkIsBossWave } from '../data/enemies';
 import { WARRIORS, UNIT_CLASS_INFO, POSITION_INFO, getCounterBonus } from '../data/warriors';
 import { RESOURCE_INFO } from '../data/trades';
-import type { BattleLogEntry, BattleLogType, PositionRow, Warrior, Enemy } from '../types';
+import type { BattleLogEntry, BattleLogType, PositionRow, Warrior, Enemy, BossSkillWarning, TieredReward, FailureCompensation } from '../types';
 
 const LOG_TYPE_STYLES: Record<BattleLogType, string> = {
   attack: 'log-attack',
@@ -164,6 +164,128 @@ const CounterHint = ({ warriors, enemies }: { warriors: Warrior[]; enemies: Enem
   );
 };
 
+const BossSkillWarningDisplay = ({ warnings }: { warnings: BossSkillWarning[] }) => {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="boss-skill-warnings">
+      <div className="warning-title">⚠️ Boss技能预警</div>
+      {warnings.map((w, i) => (
+        <div key={i} className={`skill-warning ${w.remainingRounds <= 1 ? 'imminent' : ''}`}>
+          <span className="warning-icon">{w.skill.icon}</span>
+          <div className="warning-info">
+            <span className="warning-name">{w.skill.name}</span>
+            <span className="warning-desc">{w.skill.description}</span>
+          </div>
+          <span className={`warning-countdown ${w.remainingRounds <= 1 ? 'urgent' : ''}`}>
+            {w.remainingRounds}回合后
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const WallDurabilityBar = ({ wall }: { wall: { currentHp: number; maxHp: number; level: number } }) => {
+  const percent = wall.maxHp > 0 ? (wall.currentHp / wall.maxHp) * 100 : 0;
+  const color = percent > 70 ? '#4ade80' : percent > 30 ? '#facc15' : percent > 0 ? '#fb923c' : '#ef4444';
+  return (
+    <div className="wall-durability-section">
+      <div className="wall-header">
+        <span className="wall-title">🧱 城墙耐久</span>
+        <span className="wall-level">Lv.{wall.level}</span>
+      </div>
+      <div className="wall-bar">
+        <div className="wall-fill" style={{ width: `${percent}%`, background: color }} />
+      </div>
+      <div className="wall-values">
+        <span style={{ color }}>{wall.currentHp}</span> / {wall.maxHp}
+      </div>
+      {percent <= 0 && <div className="wall-broken">💥 城墙已破！城防加成归零</div>}
+    </div>
+  );
+};
+
+const TieredRewardsDisplay = ({ rewards, achievedTier }: { rewards: TieredReward[]; achievedTier: string | null }) => {
+  return (
+    <div className="tiered-rewards">
+      <div className="tiered-title">🏅 奖励分层结算</div>
+      {rewards.map((reward) => {
+        const isAchieved = achievedTier === reward.tier;
+        const isHigher = achievedTier && rewards.findIndex(r => r.tier === achievedTier) >= rewards.findIndex(r => r.tier === reward.tier);
+        return (
+          <div key={reward.tier} className={`tier-item ${isAchieved ? 'achieved' : ''} ${isHigher && !isAchieved ? 'surpassed' : ''}`}>
+            <div className="tier-header">
+              <span className="tier-icon">{reward.icon}</span>
+              <span className="tier-label">{reward.label}</span>
+              {isAchieved && <span className="tier-badge">✓ 已达成</span>}
+            </div>
+            <div className="tier-condition">{reward.condition}</div>
+            <div className="tier-resources">
+              {Object.entries(reward.resources).map(([key, amount]) => (
+                <span key={key} className="tier-resource">
+                  {RESOURCE_INFO[key as keyof typeof RESOURCE_INFO]?.icon || '📦'}+{amount}
+                </span>
+              ))}
+              {reward.loyaltyBonus > 0 && (
+                <span className="tier-loyalty">❤️+{reward.loyaltyBonus}</span>
+              )}
+              {reward.expBonus > 0 && (
+                <span className="tier-exp">⭐+{reward.expBonus}经验</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const FailureCompensationDisplay = ({ compensation }: { compensation: FailureCompensation }) => {
+  return (
+    <div className="failure-compensation">
+      <div className="compensation-title">🩹 失败补偿</div>
+      <div className="compensation-stats">
+        <div className="comp-stat">
+          <span className="comp-label">造成伤害</span>
+          <span className="comp-value">{compensation.damageDealt}</span>
+        </div>
+        <div className="comp-stat">
+          <span className="comp-label">击杀敌人</span>
+          <span className="comp-value">{compensation.enemiesDefeated}</span>
+        </div>
+        <div className="comp-stat">
+          <span className="comp-label">存活回合</span>
+          <span className="comp-value">{compensation.roundsSurvived}</span>
+        </div>
+      </div>
+      <div className="compensation-details">
+        {Object.entries(compensation.resources).some(([, v]) => (v as number) > 0) && (
+          <div className="comp-resources">
+            <span className="comp-label">资源补偿：</span>
+            {Object.entries(compensation.resources)
+              .filter(([, v]) => (v as number) > 0)
+              .map(([key, amount]) => (
+                <span key={key} className="comp-resource">
+                  {RESOURCE_INFO[key as keyof typeof RESOURCE_INFO]?.icon || '📦'}+{amount}
+                </span>
+              ))}
+          </div>
+        )}
+        {compensation.warriorRecoveryRate > 0 && (
+          <div className="comp-recovery">
+            💊 伤员恢复率：{Math.floor(compensation.warriorRecoveryRate * 100)}%
+          </div>
+        )}
+        {compensation.loyaltyMitigation > 0 && (
+          <div className="comp-loyalty">
+            ❤️ 忠诚减免：+{compensation.loyaltyMitigation}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const BattleSummaryCard = ({ summary }: { summary: any }) => {
   if (!summary) return null;
   return (
@@ -269,24 +391,54 @@ export function BattlePanel() {
       </div>
 
       {!invasion && (
-        <button className="btn btn-danger btn-large" onClick={startInvasion}>
-          ⚠️ 召唤敌袭
-        </button>
+        <div className="next-wave-info">
+          <div className="wave-prediction">
+            <span className="prediction-label">下一波：第 {Math.floor(useGameStore.getState().day / 2) + 1} 波</span>
+            {checkIsBossWave(Math.floor(useGameStore.getState().day / 2) + 1) && (
+              <span className="boss-wave-indicator">👹 Boss波次！</span>
+            )}
+          </div>
+          <button className="btn btn-danger btn-large" onClick={startInvasion}>
+            ⚠️ 召唤敌袭
+          </button>
+        </div>
       )}
 
       {invasion && invasion.isActive && (
-        <div className="invasion-alert">
+        <div className={`invasion-alert ${invasion.isBossWave ? 'boss-invasion' : ''}`}>
           <div className="invasion-header">
-            <span className="invasion-wave">⚠️ 第 {invasion.wave} 波入侵！</span>
+            <span className={`invasion-wave ${invasion.isBossWave ? 'boss' : ''}`}>
+              {invasion.isBossWave ? '👹 BOSS' : '⚠️'} 第 {invasion.wave} 波入侵！
+            </span>
             <span className="invasion-countdown">
               {Math.ceil(invasion.countdown)}s 后自动开战
             </span>
           </div>
 
+          {invasion.isBossWave && invasion.bossId && BOSSES[invasion.bossId] && (
+            <div className="boss-info-panel">
+              <div className="boss-identity">
+                <span className="boss-icon-large">{BOSSES[invasion.bossId].icon}</span>
+                <div className="boss-details">
+                  <div className="boss-name">{BOSSES[invasion.bossId].name}</div>
+                  <div className="boss-skills-preview">
+                    技能：{BOSSES[invasion.bossId].skills.map(s => `${s.icon}${s.name}`).join(' ')}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <WallDurabilityBar wall={invasion.wallDurability} />
+
           <div className="morale-section">
             <MoraleBar value={invasion.armyMorale} label="🟢 我军士气" />
             <MoraleBar value={invasion.enemyMorale} label="🔴 敌军士气" />
           </div>
+
+          {invasion.bossSkillWarnings.length > 0 && (
+            <BossSkillWarningDisplay warnings={invasion.bossSkillWarnings} />
+          )}
 
           <CounterHint warriors={warriors} enemies={invasion.enemies} />
 
@@ -311,15 +463,26 @@ export function BattlePanel() {
       )}
 
       {invasion && !invasion.isActive && invasion.result !== 'pending' && (
-        <div className={`battle-result ${invasion.result}`}>
+        <div className={`battle-result ${invasion.result} ${invasion.isBossWave ? 'boss-result' : ''}`}>
           <div className="result-title">
             {invasion.result === 'victory' ? '🏆 胜利！' : '💔 失败...'}
+            {invasion.isBossWave && invasion.result === 'victory' && ' 👑 Boss已击杀！'}
           </div>
+
+          <WallDurabilityBar wall={invasion.wallDurability} />
 
           <div className="morale-section post-battle">
             <MoraleBar value={invasion.armyMorale} label="战后我军士气" />
             <MoraleBar value={invasion.enemyMorale} label="战后敌军士气" />
           </div>
+
+          {invasion.result === 'victory' && invasion.achievedTier && (
+            <TieredRewardsDisplay rewards={invasion.tieredRewards} achievedTier={invasion.achievedTier} />
+          )}
+
+          {invasion.result === 'defeat' && invasion.failureCompensation && (
+            <FailureCompensationDisplay compensation={invasion.failureCompensation} />
+          )}
 
           <BattleSummaryCard summary={invasion.battleSummary || battleSummary} />
 

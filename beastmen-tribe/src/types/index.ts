@@ -259,6 +259,70 @@ export interface BattleSummary {
   criticalHits: number;
 }
 
+export type BossSkillType = 'aoe' | 'stun' | 'heal_self' | 'buff_minions' | 'wall_breaker';
+
+export interface BossSkillConfig {
+  id: string;
+  name: string;
+  icon: string;
+  type: BossSkillType;
+  description: string;
+  damage?: number;
+  healPercent?: number;
+  attackBoost?: number;
+  defenseBoost?: number;
+  stunRounds?: number;
+  wallDamage?: number;
+  warningRounds: number;
+  cooldown: number;
+}
+
+export interface BossSkillWarning {
+  skill: BossSkillConfig;
+  remainingRounds: number;
+}
+
+export interface BossConfig {
+  id: string;
+  name: string;
+  icon: string;
+  attack: number;
+  defense: number;
+  hp: number;
+  reward: Partial<Resources>;
+  skills: BossSkillConfig[];
+  waveThreshold: number;
+  minionType: EnemyType;
+  minionCount: number;
+}
+
+export interface WallDurability {
+  maxHp: number;
+  currentHp: number;
+  level: number;
+}
+
+export type RewardTier = 'base' | 'performance' | 'perfect';
+
+export interface TieredReward {
+  tier: RewardTier;
+  label: string;
+  icon: string;
+  resources: Partial<Resources>;
+  loyaltyBonus: number;
+  expBonus: number;
+  condition: string;
+}
+
+export interface FailureCompensation {
+  resources: Partial<Resources>;
+  warriorRecoveryRate: number;
+  loyaltyMitigation: number;
+  damageDealt: number;
+  enemiesDefeated: number;
+  roundsSurvived: number;
+}
+
 export interface Invasion {
   id: string;
   wave: number;
@@ -271,6 +335,14 @@ export interface Invasion {
   battleSummary?: BattleSummary;
   armyMorale: number;
   enemyMorale: number;
+  isBossWave: boolean;
+  bossId?: string;
+  bossSkillWarnings: BossSkillWarning[];
+  wallDurability: WallDurability;
+  tieredRewards: TieredReward[];
+  achievedTier: RewardTier | null;
+  failureCompensation: FailureCompensation | null;
+  skillCooldowns: Record<string, number>;
 }
 
 export type TradeType = 'buy' | 'sell';

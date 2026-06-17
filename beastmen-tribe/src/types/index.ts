@@ -1372,6 +1372,7 @@ export interface LoadSaveResult {
   error?: string;
   warnings?: string[];
   needsMigration?: boolean;
+  hasBackup?: boolean;
   versionMismatch?: { saveVersion: number; currentVersion: number };
 }
 

@@ -5975,10 +5975,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const hydrated = hydrateGameState(result.state);
       localStorage.setItem(SAVE_KEY, JSON.stringify({ ...hydrated, lastSave: Date.now() }));
       set(hydrated);
-    } else if (!result.success && result.state) {
-      const hydrated = hydrateGameState(result.state);
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...hydrated, lastSave: Date.now() }));
-      set(hydrated);
     }
     return result;
   },

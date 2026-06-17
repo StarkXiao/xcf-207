@@ -159,10 +159,24 @@ export const loadSlot = (slotId: string): LoadSaveResult => {
   if (slot.isCorrupted) {
     const warnings: string[] = [];
     if (slot.corruptionReason) warnings.push(slot.corruptionReason);
+
+    const backupKey = `${SAVE_SLOTS_KEY}_${slot.id}${BACKUP_SUFFIX}`;
+    const backupRaw = localStorage.getItem(backupKey);
+    const hasValidBackup = (() => {
+      if (!backupRaw) return false;
+      try {
+        const backup = JSON.parse(backupRaw) as SaveSlot;
+        return validateSaveData(backup.data).valid;
+      } catch (e) {
+        return false;
+      }
+    })();
+
     return {
       success: false,
-      error: '存档已损坏',
+      error: hasValidBackup ? '存档已损坏，请使用「回滚备份」功能恢复' : '存档已损坏，无可用备份',
       warnings,
+      hasBackup: hasValidBackup,
       versionMismatch,
     };
   }
@@ -170,33 +184,45 @@ export const loadSlot = (slotId: string): LoadSaveResult => {
   const validation = validateSaveData(slot.data);
   if (!validation.valid) {
     const warnings: string[] = [];
-    if (validation.reason) warnings.push(validation.reason);
+    if (validation.reason) warnings.push(`损坏原因：${validation.reason}`);
+
+    const slotIndex = allSlots.findIndex((s) => s.id === slot.id);
+    if (slotIndex >= 0) {
+      allSlots[slotIndex] = {
+        ...allSlots[slotIndex],
+        isCorrupted: true,
+        corruptionReason: validation.reason,
+      };
+      persistAllSlots(allSlots);
+    }
 
     const backupKey = `${SAVE_SLOTS_KEY}_${slot.id}${BACKUP_SUFFIX}`;
     const backupRaw = localStorage.getItem(backupKey);
-    if (backupRaw) {
+    const hasValidBackup = (() => {
+      if (!backupRaw) return false;
       try {
         const backup = JSON.parse(backupRaw) as SaveSlot;
-        const backupValidation = validateSaveData(backup.data);
-        if (backupValidation.valid) {
-          return {
-            success: false,
-            error: '存档损坏，但检测到备份可用',
-            warnings: [...warnings, `损坏原因：${validation.reason}`, '建议回滚到上一个备份'],
-            state: backup.data,
-            versionMismatch,
-            needsMigration: !!versionMismatch,
-          };
-        }
+        return validateSaveData(backup.data).valid;
       } catch (e) {
-        console.warn('Backup load failed:', e);
+        return false;
       }
+    })();
+
+    if (hasValidBackup) {
+      return {
+        success: false,
+        error: '存档已损坏，请使用「回滚备份」功能恢复',
+        warnings: [...warnings, '检测到可用的备份存档，可点击「回滚备份」按钮恢复'],
+        hasBackup: true,
+        versionMismatch,
+      };
     }
 
     return {
       success: false,
-      error: `存档损坏：${validation.reason}`,
+      error: `存档已损坏：${validation.reason}`,
       warnings,
+      hasBackup: false,
       versionMismatch,
     };
   }

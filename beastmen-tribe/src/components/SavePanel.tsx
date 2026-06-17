@@ -287,7 +287,7 @@ function ResultNotification({
     return () => clearTimeout(timer);
   }, [onClose]);
 
-  const isSuccess = result.success || result.state;
+  const isSuccess = result.success;
   const title = isSuccess ? '✅ 加载成功' : '❌ 加载失败';
 
   return (
@@ -359,9 +359,7 @@ export function SavePanel() {
   const handleLoad = (slotId: string) => {
     const result = loadFromSlot(slotId);
     setLoadResult(result);
-    if (result.success || result.state) {
-      refreshSlots();
-    }
+    refreshSlots();
   };
 
   const handleDelete = (slotId: string) => {
@@ -378,7 +376,7 @@ export function SavePanel() {
   const handleRollback = (slotId: string) => {
     const result = rollbackSlot(slotId);
     setLoadResult(result);
-    if (result.success || result.state) {
+    if (result.success) {
       refreshSlots();
     }
   };

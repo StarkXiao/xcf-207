@@ -322,6 +322,28 @@ const LOYALTY_RECOVERY_WELL_FED = 0.1;
 const EVENT_INTERVAL_MIN = 60;
 const EVENT_INTERVAL_MAX = 120;
 
+const RETIRE_FOOD_REFUND_RATIO = 0.5;
+const RETIRE_LOYALTY_PENALTY = 2;
+
+const calculateMilitaryPopulation = (warriors: Warrior[]): number => {
+  return warriors.reduce((sum, w) => sum + (WARRIORS[w.type]?.populationCost || 1), 0);
+};
+
+const calculateTrainingPopulation = (trainingQueue: TrainingQueue[]): number => {
+  return trainingQueue.reduce((sum, q) => sum + q.count * (q.populationCost || WARRIORS[q.type]?.populationCost || 1), 0);
+};
+
+const calculateArmyFoodConsumption = (warriors: Warrior[]): number => {
+  return warriors.reduce((sum, w) => sum + (WARRIORS[w.type]?.foodConsumption || 1), 0);
+};
+
+const getBarracksPopulationEfficiency = (buildings: Building[]): number => {
+  const barracks = buildings.filter((b) => b.type === 'barracks' && !b.isBuilding);
+  if (barracks.length === 0) return 1;
+  const totalLevel = barracks.reduce((sum, b) => sum + b.level, 0);
+  return Math.max(0.7, 1 - totalLevel * 0.05);
+};
+
 const BASE_RESOURCE_CAPACITY: ResourceCapacity = {
   food: 500,
   wood: 500,
@@ -719,6 +741,19 @@ const loadSave = (): GameState => {
         state.unlockedBuildings = [...state.unlockedBuildings, 'totem_altar'];
       }
 
+      state.trainingQueue = (state.trainingQueue || []).map((q) => ({
+        ...q,
+        populationCost: q.populationCost || WARRIORS[q.type]?.populationCost || 1,
+      }));
+
+      const militaryPop = calculateMilitaryPopulation(state.warriors);
+      const trainingPop = calculateTrainingPopulation(state.trainingQueue);
+      const totalArmyPop = militaryPop + trainingPop;
+      if (state.population < totalArmyPop) {
+        state.population = totalArmyPop;
+        state.maxPopulation = Math.max(state.maxPopulation, state.population + 5);
+      }
+
       state.nightRaid = parsed.nightRaid
         ? {
             ...createInitialNightRaidState(),
@@ -781,6 +816,11 @@ interface GameStore extends GameState {
 
   trainWarrior: (type: WarriorType) => boolean;
   processTraining: (delta: number) => Warrior[];
+  retireWarrior: (warriorId: string) => { success: boolean; message: string };
+  getMilitaryPopulation: () => number;
+  getTrainingPopulation: () => number;
+  getAvailablePopulation: () => number;
+  getArmyFoodConsumption: () => number;
 
   startInvasion: () => void;
   fightBattle: () => { result: 'victory' | 'defeat'; log: string[]; battleLog: BattleLogEntry[]; battleSummary: BattleSummary };
@@ -1279,6 +1319,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!reqBuilding || reqBuilding.level < config.requires.level) return false;
     }
 
+    const barracksEfficiency = getBarracksPopulationEfficiency(state.buildings);
+    const popCost = Math.max(1, Math.ceil(config.populationCost * barracksEfficiency));
+    const currentMilitaryPop = calculateMilitaryPopulation(state.warriors);
+    const currentTrainingPop = calculateTrainingPopulation(state.trainingQueue);
+    const totalUsedPop = currentMilitaryPop + currentTrainingPop;
+    const availablePop = state.population - totalUsedPop;
+    if (availablePop < popCost) return false;
+
     const trainCostBonus = calculateTechBonus(state.technologies, 'train_cost');
     const actualCost: Partial<Resources> = {};
     for (const [key, amount] of Object.entries(config.cost)) {
@@ -1303,6 +1351,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
             progress: 0,
             total: config.trainTime,
             count: 1,
+            populationCost: popCost,
           },
         ],
       });
@@ -1364,6 +1413,67 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     return completed;
+  },
+
+  retireWarrior: (warriorId) => {
+    const state = get();
+    const warrior = state.warriors.find((w) => w.id === warriorId);
+    if (!warrior) {
+      return { success: false, message: '战士不存在' };
+    }
+    if (state.nightRaid.garrisonWarriors.includes(warriorId)) {
+      return { success: false, message: '该战士正在驻守，无法退役' };
+    }
+    if (state.activeExpedition) {
+      const inExpedition = state.activeExpedition.warriors.some((w) => w.id === warriorId);
+      if (inExpedition) {
+        return { success: false, message: '该战士正在远征，无法退役' };
+      }
+    }
+    for (const caravan of state.caravans) {
+      if (caravan.warriorIds.includes(warriorId)) {
+        return { success: false, message: '该战士正在护送商队，无法退役' };
+      }
+    }
+
+    const config = WARRIORS[warrior.type];
+    const refundFood = Math.floor((config.cost.food || 0) * RETIRE_FOOD_REFUND_RATIO);
+    if (refundFood > 0) {
+      state.addResources({ food: refundFood });
+    }
+
+    const newWarriors = state.warriors.filter((w) => w.id !== warriorId);
+    const newLoyalty = Math.max(0, state.loyalty - RETIRE_LOYALTY_PENALTY);
+
+    set({
+      warriors: newWarriors,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    return {
+      success: true,
+      message: `${config.name}已退役，返还${refundFood}食物`,
+    };
+  },
+
+  getMilitaryPopulation: () => {
+    return calculateMilitaryPopulation(get().warriors);
+  },
+
+  getTrainingPopulation: () => {
+    return calculateTrainingPopulation(get().trainingQueue);
+  },
+
+  getAvailablePopulation: () => {
+    const state = get();
+    const militaryPop = calculateMilitaryPopulation(state.warriors);
+    const trainingPop = calculateTrainingPopulation(state.trainingQueue);
+    return Math.max(0, state.population - militaryPop - trainingPop);
+  },
+
+  getArmyFoodConsumption: () => {
+    return calculateArmyFoodConsumption(get().warriors);
   },
 
   startInvasion: () => {
@@ -1959,10 +2069,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const foodConsumptionTechBonus = calculateTechBonus(state.technologies, 'food_consumption');
     const foodConsumptionTotemBonus = state.getTotemBonus('food_consumption');
     const loyaltyDecayBonus = calculateTechBonus(state.technologies, 'loyalty_decay');
+    const armyFoodConsumption = calculateArmyFoodConsumption(state.warriors);
     const adjustedConsumptionRate = state.foodConsumptionRate * (1 + foodConsumptionTechBonus + foodConsumptionTotemBonus);
     const adjustedLoyaltyDecay = LOYALTY_DECAY_NO_FOOD * (1 + loyaltyDecayBonus);
 
-    const foodConsumed = state.population * adjustedConsumptionRate * delta;
+    const civilianFood = state.population * adjustedConsumptionRate;
+    const militaryFood = armyFoodConsumption * adjustedConsumptionRate;
+    const foodConsumed = (civilianFood + militaryFood) * delta;
     let newFood = state.resources.food - foodConsumed;
     let newLoyalty = state.loyalty;
     let newPopulation = state.population;

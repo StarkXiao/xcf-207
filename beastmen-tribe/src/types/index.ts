@@ -195,6 +195,8 @@ export interface WarriorConfig {
   healPower?: number;
   moraleBonus?: number;
   counterRate?: number;
+  populationCost: number;
+  foodConsumption: number;
   requires?: { building: BuildingType; level: number };
 }
 
@@ -216,6 +218,7 @@ export interface TrainingQueue {
   progress: number;
   total: number;
   count: number;
+  populationCost: number;
 }
 
 export type EnemyType = 'goblin' | 'wolf' | 'troll' | 'orc' | 'dragon';

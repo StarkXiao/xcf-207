@@ -1,5 +1,6 @@
 import { useGameStore } from '../store/useGameStore';
 import { RESOURCE_INFO } from '../data/trades';
+import { WARRIORS } from '../data/warriors';
 import type { EventEffect, ResourceType } from '../types';
 
 const getLoyaltyLevel = (loyalty: number) => {
@@ -10,8 +11,9 @@ const getLoyaltyLevel = (loyalty: number) => {
   return { label: '叛离', color: '#e53935', icon: '💔' };
 };
 
-const getGrowthStatus = (population: number, maxPopulation: number, loyalty: number) => {
+const getGrowthStatus = (population: number, maxPopulation: number, loyalty: number, availablePop: number) => {
   if (population >= maxPopulation) return { label: '已达上限', color: '#ff9800' };
+  if (availablePop <= 0) return { label: '军队占用', color: '#f44336' };
   if (loyalty > 50) return { label: '增长中', color: '#4caf50' };
   if (loyalty > 20) return { label: '停滞', color: '#ff9800' };
   return { label: '流失中', color: '#e53935' };
@@ -48,9 +50,18 @@ export function PopulationPanel() {
   const resources = useGameStore((s) => s.resources);
   const buildings = useGameStore((s) => s.buildings);
   const dismissEvent = useGameStore((s) => s.dismissEvent);
+  const warriors = useGameStore((s) => s.warriors);
+  const getMilitaryPopulation = useGameStore((s) => s.getMilitaryPopulation);
+  const getTrainingPopulation = useGameStore((s) => s.getTrainingPopulation);
+  const getAvailablePopulation = useGameStore((s) => s.getAvailablePopulation);
+  const getArmyFoodConsumption = useGameStore((s) => s.getArmyFoodConsumption);
 
   const loyaltyLevel = getLoyaltyLevel(loyalty);
-  const growthStatus = getGrowthStatus(population, maxPopulation, loyalty);
+  const militaryPop = getMilitaryPopulation();
+  const trainingPop = getTrainingPopulation();
+  const availablePop = getAvailablePopulation();
+  const civilianPop = Math.max(0, population - militaryPop - trainingPop);
+  const growthStatus = getGrowthStatus(population, maxPopulation, loyalty, availablePop);
   const popPercent = maxPopulation > 0 ? (population / maxPopulation) * 100 : 0;
 
   const hutCount = buildings.filter((b) => b.type === 'hut' && !b.isBuilding).length;
@@ -58,12 +69,27 @@ export function PopulationPanel() {
     .filter((b) => b.type === 'hut' && !b.isBuilding)
     .reduce((sum, b) => sum + b.level, 0);
 
-  const foodPerSecond = (population * foodConsumptionRate).toFixed(1);
+  const armyFoodMultiplier = getArmyFoodConsumption();
+  const civilianFoodPerSecond = civilianPop * foodConsumptionRate;
+  const militaryFoodPerSecond = armyFoodMultiplier * foodConsumptionRate;
+  const totalFoodPerSecond = civilianFoodPerSecond + militaryFoodPerSecond;
   const foodProduction = buildings
     .filter((b) => !b.isBuilding && b.type === 'farm')
     .reduce((sum, b) => sum + 2 * b.level, 0);
 
-  const foodNetRate = foodProduction - population * foodConsumptionRate;
+  const foodNetRate = foodProduction - totalFoodPerSecond;
+
+  const warriorBreakdown: Record<string, { count: number; pop: number; food: number }> = {};
+  for (const w of warriors) {
+    const config = WARRIORS[w.type];
+    if (!config) continue;
+    if (!warriorBreakdown[w.type]) {
+      warriorBreakdown[w.type] = { count: 0, pop: 0, food: 0 };
+    }
+    warriorBreakdown[w.type].count++;
+    warriorBreakdown[w.type].pop += config.populationCost;
+    warriorBreakdown[w.type].food += config.foodConsumption;
+  }
 
   return (
     <div className="panel population-panel">
@@ -96,8 +122,31 @@ export function PopulationPanel() {
           <span className="detail-value">基础10 + 小屋{hutCount}座(Lv合计{hutLevels})</span>
         </div>
         <div className="pop-detail-item">
-          <span className="detail-label">🍖 食物消耗</span>
-          <span className="detail-value">{foodPerSecond}/秒</span>
+          <span className="detail-label">👨‍👩‍👧 平民人口</span>
+          <span className="detail-value" style={{ color: '#2196f3' }}>{civilianPop}人</span>
+        </div>
+        <div className="pop-detail-item">
+          <span className="detail-label">⚔️ 军队人口</span>
+          <span className="detail-value" style={{ color: '#ff9800' }}>
+            {militaryPop}人
+            {trainingPop > 0 && <span style={{ color: '#2196f3' }}> +训练{trainingPop}</span>}
+          </span>
+        </div>
+        <div className="pop-detail-item">
+          <span className="detail-label">✅ 空闲可用</span>
+          <span className="detail-value" style={{ color: availablePop > 0 ? '#4caf50' : '#f44336' }}>{availablePop}人</span>
+        </div>
+        <div className="pop-detail-item">
+          <span className="detail-label">🍖 平民食物消耗</span>
+          <span className="detail-value">{civilianFoodPerSecond.toFixed(1)}/秒</span>
+        </div>
+        <div className="pop-detail-item">
+          <span className="detail-label">⚔️ 军队食物消耗</span>
+          <span className="detail-value" style={{ color: '#ff9800' }}>{militaryFoodPerSecond.toFixed(1)}/秒</span>
+        </div>
+        <div className="pop-detail-item">
+          <span className="detail-label">🍖 总食物消耗</span>
+          <span className="detail-value">{totalFoodPerSecond.toFixed(1)}/秒</span>
         </div>
         <div className="pop-detail-item">
           <span className="detail-label">🌿 食物产出</span>
@@ -122,6 +171,25 @@ export function PopulationPanel() {
           </span>
         </div>
       </div>
+
+      {warriors.length > 0 && (
+        <div className="army-breakdown">
+          <div className="queue-title">⚔️ 军队构成</div>
+          <div className="army-breakdown-list">
+            {Object.entries(warriorBreakdown).map(([type, info]) => {
+              const config = WARRIORS[type];
+              return (
+                <div key={type} className="breakdown-item">
+                  <span>{config.icon} {config.name}</span>
+                  <span className="breakdown-stats">
+                    x{info.count} | 👥{info.pop}人 | 🍖{info.food.toFixed(1)}x
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="loyalty-section">
         <div className="loyalty-header">
@@ -199,7 +267,9 @@ export function PopulationPanel() {
       <div className="pop-tips">
         <div className="tips-title">📖 人口与忠诚机制</div>
         <ul className="tips-list">
-          <li>每位族人每秒消耗 {foodConsumptionRate} 食物</li>
+          <li>每位族人每秒消耗 {foodConsumptionRate} 食物，军队有额外食物倍率</li>
+          <li>训练战士会占用人口，退役可释放人口并返还50%食物</li>
+          <li>升级兵营可降低训练人口占用（最低70%）</li>
           <li>食物不足时忠诚度持续下降</li>
           <li>忠诚 &gt; 50 人口自然增长，忠诚 &lt; 20 人口流失</li>
           <li>忠诚度影响征兵效率和战斗士气</li>

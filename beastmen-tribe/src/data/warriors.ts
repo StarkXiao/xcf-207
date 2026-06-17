@@ -15,6 +15,8 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     preferredPosition: 'front',
     moraleBonus: 2,
     counterRate: 0.15,
+    populationCost: 1,
+    foodConsumption: 1,
   },
   archer: {
     id: 'archer',
@@ -30,6 +32,8 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     preferredPosition: 'back',
     moraleBonus: 0,
     counterRate: 0.05,
+    populationCost: 1,
+    foodConsumption: 1,
     requires: { building: 'barracks', level: 2 },
   },
   shaman: {
@@ -47,6 +51,8 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     healPower: 10,
     moraleBonus: 3,
     counterRate: 0.05,
+    populationCost: 2,
+    foodConsumption: 1.5,
     requires: { building: 'barracks', level: 3 },
   },
   berserker: {
@@ -63,6 +69,8 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     preferredPosition: 'front',
     moraleBonus: 5,
     counterRate: 0.2,
+    populationCost: 2,
+    foodConsumption: 2,
     requires: { building: 'smithy', level: 2 },
   },
   warlord: {
@@ -80,6 +88,8 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     healPower: 5,
     moraleBonus: 10,
     counterRate: 0.25,
+    populationCost: 3,
+    foodConsumption: 2.5,
     requires: { building: 'smithy', level: 4 },
   },
 };

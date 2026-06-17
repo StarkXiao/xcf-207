@@ -1,4 +1,4 @@
-import type { WarriorConfig } from '../types';
+import type { WarriorConfig, UnitClass, PositionRow } from '../types';
 
 export const WARRIORS: Record<string, WarriorConfig> = {
   grunt: {
@@ -11,6 +11,10 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     attack: 8,
     defense: 5,
     hp: 50,
+    unitClass: 'infantry',
+    preferredPosition: 'front',
+    moraleBonus: 2,
+    counterRate: 0.15,
   },
   archer: {
     id: 'archer',
@@ -22,6 +26,10 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     attack: 12,
     defense: 3,
     hp: 35,
+    unitClass: 'ranged',
+    preferredPosition: 'back',
+    moraleBonus: 0,
+    counterRate: 0.05,
     requires: { building: 'barracks', level: 2 },
   },
   shaman: {
@@ -34,6 +42,11 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     attack: 6,
     defense: 4,
     hp: 40,
+    unitClass: 'support',
+    preferredPosition: 'middle',
+    healPower: 10,
+    moraleBonus: 3,
+    counterRate: 0.05,
     requires: { building: 'barracks', level: 3 },
   },
   berserker: {
@@ -46,6 +59,10 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     attack: 20,
     defense: 8,
     hp: 80,
+    unitClass: 'cavalry',
+    preferredPosition: 'front',
+    moraleBonus: 5,
+    counterRate: 0.2,
     requires: { building: 'smithy', level: 2 },
   },
   warlord: {
@@ -58,6 +75,37 @@ export const WARRIORS: Record<string, WarriorConfig> = {
     attack: 35,
     defense: 15,
     hp: 150,
+    unitClass: 'hero',
+    preferredPosition: 'middle',
+    healPower: 5,
+    moraleBonus: 10,
+    counterRate: 0.25,
     requires: { building: 'smithy', level: 4 },
   },
+};
+
+export const UNIT_CLASS_INFO: Record<UnitClass, { name: string; icon: string; description: string }> = {
+  infantry: { name: '步兵', icon: '🛡️', description: '克制远程，被骑兵克制' },
+  ranged: { name: '远程', icon: '🏹', description: '克制骑兵，被步兵克制' },
+  cavalry: { name: '骑兵', icon: '🐎', description: '克制步兵，被远程克制' },
+  support: { name: '辅助', icon: '✨', description: '治疗支援，无克制关系' },
+  hero: { name: '英雄', icon: '👑', description: '全能单位，克制所有兵种' },
+};
+
+export const POSITION_INFO: Record<PositionRow, { name: string; icon: string; description: string }> = {
+  front: { name: '前排', icon: '⚔️', description: '承受敌方主要攻击，近战单位最佳位置' },
+  middle: { name: '中排', icon: '🛡️', description: '兼顾攻防，辅助和英雄最佳位置' },
+  back: { name: '后排', icon: '🏹', description: '安全输出位，远程单位最佳位置' },
+};
+
+export const COUNTER_TABLE: Record<UnitClass, Partial<Record<UnitClass, number>>> = {
+  infantry: { ranged: 0.4, cavalry: -0.3 },
+  ranged: { cavalry: 0.4, infantry: -0.3 },
+  cavalry: { infantry: 0.4, ranged: -0.3 },
+  support: {},
+  hero: { infantry: 0.2, ranged: 0.2, cavalry: 0.2, support: 0.2 },
+};
+
+export const getCounterBonus = (attackerClass: UnitClass, defenderClass: UnitClass): number => {
+  return COUNTER_TABLE[attackerClass]?.[defenderClass] || 0;
 };

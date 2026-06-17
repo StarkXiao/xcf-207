@@ -40,9 +40,12 @@ import type {
   ActivePolicy,
   TaxRates,
   UnitPreference,
+  BattleLogEntry,
+  BattleSummary,
+  PositionRow,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity } from '../data/buildings';
-import { WARRIORS } from '../data/warriors';
+import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES } from '../data/enemies';
 import { generateTrades } from '../data/trades';
 import { triggerRandomEvent } from '../data/events';
@@ -770,7 +773,7 @@ interface GameStore extends GameState {
   processTraining: (delta: number) => Warrior[];
 
   startInvasion: () => void;
-  fightBattle: () => { result: 'victory' | 'defeat'; log: string[] };
+  fightBattle: () => { result: 'victory' | 'defeat'; log: string[]; battleLog: BattleLogEntry[]; battleSummary: BattleSummary };
 
   executeTrade: (tradeId: string) => boolean;
   refreshTrades: () => void;
@@ -1319,6 +1322,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           defense: config.defense,
           level: 1,
           exp: 0,
+          position: config.preferredPosition,
+          morale: 70,
         });
       }
 
@@ -1353,8 +1358,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const statMultiplier = 1 + invasionMod;
 
     const enemies: Enemy[] = [];
+    const enemyConfig = ENEMIES[invader.type];
 
     for (let i = 0; i < invader.count; i++) {
+      const position: PositionRow = i === 0 ? 'front' : i < Math.ceil(invader.count * 0.6) ? 'middle' : 'back';
       enemies.push({
         id: generateId(),
         type: invader.type as any,
@@ -1362,6 +1369,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         maxHp: Math.floor(invader.maxHp * statMultiplier),
         attack: Math.floor(invader.attack * statMultiplier),
         defense: Math.floor(invader.defense * statMultiplier),
+        position: enemyConfig?.preferredPosition || position,
+        morale: 60 + Math.floor(Math.random() * 30),
       });
     }
 
@@ -1369,6 +1378,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     for (const [key, amount] of Object.entries(invader.reward)) {
       scaledRewards[key as keyof Resources] = Math.floor((amount as number) * statMultiplier);
     }
+
+    const armyMorale = state.warriors.length > 0
+      ? Math.floor(state.warriors.reduce((s, w) => s + w.morale, 0) / state.warriors.length)
+      : 50;
 
     const invasion: Invasion = {
       id: generateId(),
@@ -1378,6 +1391,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       countdown: 30,
       rewards: scaledRewards,
       result: 'pending',
+      armyMorale,
+      enemyMorale: 65,
     };
 
     set({ invasion });
@@ -1386,8 +1401,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   fightBattle: () => {
     const state = get();
     const invasion = state.invasion;
-    const log: string[] = [];
-    if (!invasion) return { result: 'defeat' as const, log: ['无入侵战斗'] };
+    if (!invasion) return { result: 'defeat' as const, log: ['无入侵战斗'], battleLog: [], battleSummary: null as any };
+
+    const battleLogEntries: BattleLogEntry[] = [];
+    const stringLog: string[] = [];
+    const generateLogId = () => `log-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+    const addLog = (entry: Omit<BattleLogEntry, 'id'>) => {
+      const full: BattleLogEntry = { ...entry, id: generateLogId() };
+      battleLogEntries.push(full);
+      stringLog.push(full.message);
+    };
 
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
@@ -1395,6 +1419,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     for (const reinforcement of state.allyReinforcements) {
       for (const unit of reinforcement.warriors) {
         for (let i = 0; i < unit.count; i++) {
+          const config = WARRIORS[unit.type];
           myWarriors.push({
             id: generateId(),
             type: unit.type,
@@ -1404,10 +1429,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
             defense: unit.defense,
             level: 1,
             exp: 0,
+            position: config?.preferredPosition || 'middle',
+            morale: 70,
           });
         }
       }
-      log.push(`🤝 ${reinforcement.factionIcon} ${reinforcement.factionName}的援军加入战斗！`);
+      addLog({
+        type: 'system',
+        round: 0,
+        actor: reinforcement.factionName,
+        actorIcon: reinforcement.factionIcon,
+        message: `🤝 ${reinforcement.factionIcon} ${reinforcement.factionName}的援军加入战斗！`,
+      });
     }
 
     const wallTechBonus = calculateTechBonus(state.technologies, 'wall_defense');
@@ -1417,6 +1450,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const loyaltyBonus = Math.floor(state.loyalty / 20);
 
     myWarriors = myWarriors.map((w) => {
+      const config = WARRIORS[w.type];
       const atkTechBonus = calculateTechBonus(state.technologies, 'attack_boost', w.type) +
         calculateTechBonus(state.technologies, 'attack_boost');
       const defTechBonus = calculateTechBonus(state.technologies, 'defense_boost', w.type) +
@@ -1445,59 +1479,348 @@ export const useGameStore = create<GameStore>((set, get) => ({
         defense: Math.floor(w.defense * (1 + defBonus)),
         maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
         hp: Math.floor(w.hp * (1 + hpBonus)),
+        morale: w.morale + (config?.moraleBonus || 0),
       };
     });
 
-    log.push(`⚔️ 第 ${invasion.wave} 波入侵开始！`);
-    log.push(`敌人：${enemies.map((e) => ENEMIES[e.type].name).join(', ')}`);
-    log.push(`我方防御加成：+${wallDefense}，士气加成：+${loyaltyBonus}`);
+    let armyMorale = invasion.armyMorale;
+    let enemyMorale = invasion.enemyMorale;
+
+    addLog({
+      type: 'system',
+      round: 0,
+      actor: '系统',
+      actorIcon: '📜',
+      message: `⚔️ 第 ${invasion.wave} 波入侵开始！敌军：${enemies.map((e) => `${ENEMIES[e.type].icon}${ENEMIES[e.type].name}`).join('、')}`,
+    });
+    addLog({
+      type: 'system',
+      round: 0,
+      actor: '系统',
+      actorIcon: '🛡️',
+      message: `城防加成 +${wallDefense} | 忠诚加成 +${loyaltyBonus} | 我军士气 ${armyMorale} | 敌军士气 ${enemyMorale}`,
+    });
+
+    const summary: BattleSummary = {
+      totalDamageDealt: 0,
+      totalDamageTaken: 0,
+      totalHealing: 0,
+      killsByUnit: {},
+      highestDamage: { name: '', value: 0 },
+      mostKills: { name: '', value: 0 },
+      moraleChanges: 0,
+      countersTriggered: 0,
+      criticalHits: 0,
+    };
+    const unitKillCounts: Record<string, { name: string; count: number }> = {};
+    const unitDamageCounts: Record<string, { name: string; damage: number }> = {};
+
+    const getUnitsByPosition = <T extends { position: PositionRow }>(units: T[], pos: PositionRow) =>
+      units.filter((u) => u.position === pos);
+
+    const findTarget = <T extends { position: PositionRow; hp: number }>(units: T[]): T | null => {
+      const order: PositionRow[] = ['front', 'middle', 'back'];
+      for (const pos of order) {
+        const candidates = getUnitsByPosition(units, pos).filter((u) => u.hp > 0);
+        if (candidates.length > 0) {
+          return candidates[Math.floor(Math.random() * candidates.length)];
+        }
+      }
+      return null;
+    };
+
+    const getMoraleMultiplier = (morale: number) => {
+      if (morale >= 90) return 1.25;
+      if (morale >= 70) return 1.1;
+      if (morale >= 50) return 1.0;
+      if (morale >= 30) return 0.85;
+      return 0.65;
+    };
 
     let round = 0;
-    while (myWarriors.length > 0 && enemies.length > 0 && round < 20) {
+    while (myWarriors.some((w) => w.hp > 0) && enemies.some((e) => e.hp > 0) && round < 25) {
       round++;
-      log.push(`--- 回合 ${round} ---`);
+      addLog({
+        type: 'round',
+        round,
+        actor: '系统',
+        actorIcon: '⏳',
+        message: `━━━ 回合 ${round} ━━━`,
+      });
 
-      for (const warrior of myWarriors) {
-        if (enemies.length === 0) break;
-        const target = enemies[0];
-        const damage = Math.max(1, warrior.attack + loyaltyBonus * 0.5 - target.defense / 2);
-        target.hp -= damage;
-        log.push(`${WARRIORS[warrior.type].name} 攻击 ${ENEMIES[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
-        if (target.hp <= 0) {
-          enemies.shift();
-          log.push(`💀 ${ENEMIES[target.type].name} 被击败！`);
+      const positionOrder: PositionRow[] = ['back', 'middle', 'front'];
+      for (const pos of positionOrder) {
+        const warriorsAtPos = getUnitsByPosition(myWarriors, pos).filter((w) => w.hp > 0);
+        for (const warrior of warriorsAtPos) {
+          if (!enemies.some((e) => e.hp > 0)) break;
+          const wConfig = WARRIORS[warrior.type];
+
+          if (wConfig?.healPower && wConfig.healPower > 0) {
+            const injuredAllies = myWarriors.filter(
+              (w) => w.hp > 0 && w.hp < w.maxHp && w.id !== warrior.id
+            );
+            if (injuredAllies.length > 0 && Math.random() < 0.6) {
+              injuredAllies.sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
+              const healTarget = injuredAllies[0];
+              const baseHeal = wConfig.healPower + Math.floor(warrior.attack * 0.3);
+              const moraleHealBonus = getMoraleMultiplier(armyMorale);
+              const healAmount = Math.floor(baseHeal * moraleHealBonus * (0.9 + Math.random() * 0.2));
+              const actualHeal = Math.min(healAmount, healTarget.maxHp - healTarget.hp);
+              healTarget.hp += actualHeal;
+              summary.totalHealing += actualHeal;
+
+              addLog({
+                type: 'heal',
+                round,
+                actor: wConfig.name,
+                actorIcon: wConfig.icon,
+                target: WARRIORS[healTarget.type].name,
+                targetIcon: WARRIORS[healTarget.type].icon,
+                value: actualHeal,
+                message: `💚 ${wConfig.icon}${wConfig.name} 治疗了 ${WARRIORS[healTarget.type].icon}${WARRIORS[healTarget.type].name}，恢复 ${actualHeal} 生命`,
+              });
+              continue;
+            }
+          }
+
+          const target = findTarget(enemies);
+          if (!target) continue;
+
+          const eConfig = ENEMIES[target.type];
+          const counterBonus = getCounterBonus(wConfig.unitClass, eConfig.unitClass);
+          const berserkerBonus = warrior.type === 'berserker' ? (1 - warrior.hp / warrior.maxHp) * 0.6 : 0;
+          const moraleAtk = getMoraleMultiplier(armyMorale);
+          const positionDefPenalty = target.position === 'back' ? 0.85 : target.position === 'middle' ? 0.95 : 1;
+          const isCritical = Math.random() < 0.1 + counterBonus * 0.3;
+          const critMultiplier = isCritical ? 1.6 : 1;
+          if (isCritical) summary.criticalHits++;
+
+          const baseDamage = warrior.attack * (1 + berserkerBonus) * moraleAtk * critMultiplier * positionDefPenalty;
+          const damageBeforeCounter = Math.max(1, baseDamage - target.defense * 0.5 + loyaltyBonus * 0.5);
+          const finalDamage = Math.max(1, Math.floor(damageBeforeCounter * (1 + counterBonus)));
+          target.hp -= finalDamage;
+
+          summary.totalDamageDealt += finalDamage;
+          const dKey = warrior.id;
+          if (!unitDamageCounts[dKey]) unitDamageCounts[dKey] = { name: wConfig.name, damage: 0 };
+          unitDamageCounts[dKey].damage += finalDamage;
+          if (unitDamageCounts[dKey].damage > summary.highestDamage.value) {
+            summary.highestDamage = { name: wConfig.name, value: unitDamageCounts[dKey].damage };
+          }
+
+          let extraInfo = '';
+          if (counterBonus > 0.1) extraInfo = `（克制！+${Math.floor(counterBonus * 100)}%）`;
+          else if (counterBonus < -0.1) extraInfo = `（被克制 ${Math.floor(counterBonus * 100)}%）`;
+          if (isCritical) extraInfo += ' 💥暴击！';
+
+          addLog({
+            type: isCritical ? 'critical' : counterBonus > 0.1 ? 'crush' : 'attack',
+            round,
+            actor: wConfig.name,
+            actorIcon: wConfig.icon,
+            target: eConfig.name,
+            targetIcon: eConfig.icon,
+            value: finalDamage,
+            extra: extraInfo.trim(),
+            message: `${wConfig.icon}${wConfig.name} ➜ ${eConfig.icon}${eConfig.name} 造成 ${finalDamage} 伤害${extraInfo}`,
+          });
+
+          if (target.hp <= 0) {
+            const eName = eConfig.name;
+            target.hp = 0;
+            armyMorale = Math.min(100, armyMorale + 3);
+            summary.moraleChanges += 3;
+
+            const kKey = warrior.type;
+            summary.killsByUnit[kKey] = (summary.killsByUnit[kKey] || 0) + 1;
+            if (!unitKillCounts[kKey]) unitKillCounts[kKey] = { name: wConfig.name, count: 0 };
+            unitKillCounts[kKey].count++;
+            if (unitKillCounts[kKey].count > summary.mostKills.value) {
+              summary.mostKills = { name: wConfig.name, value: unitKillCounts[kKey].count };
+            }
+
+            addLog({
+              type: 'kill',
+              round,
+              actor: wConfig.name,
+              actorIcon: wConfig.icon,
+              target: eName,
+              targetIcon: eConfig.icon,
+              message: `💀 ${wConfig.icon}${wConfig.name} 击杀了 ${eConfig.icon}${eName}！全军士气 +3`,
+            });
+
+            if (wConfig.counterRate && Math.random() < wConfig.counterRate * 0.3) {
+              const nextTarget = findTarget(enemies);
+              if (nextTarget) {
+                const counterDmg = Math.floor(finalDamage * 0.3);
+                nextTarget.hp -= counterDmg;
+                summary.totalDamageDealt += counterDmg;
+                summary.countersTriggered++;
+                addLog({
+                  type: 'counter_attack',
+                  round,
+                  actor: wConfig.name,
+                  actorIcon: wConfig.icon,
+                  target: ENEMIES[nextTarget.type].name,
+                  targetIcon: ENEMIES[nextTarget.type].icon,
+                  value: counterDmg,
+                  message: `⚡ 连杀！${wConfig.icon}${wConfig.name} 追击 ${ENEMIES[nextTarget.type].icon}${ENEMIES[nextTarget.type].name}，追加 ${counterDmg} 伤害`,
+                });
+              }
+            }
+          }
         }
       }
 
-      for (const enemy of enemies) {
-        if (myWarriors.length === 0) break;
-        const target = myWarriors[0];
-        const damage = Math.max(1, enemy.attack - target.defense / 2 - wallDefense / 10);
-        target.hp -= damage;
-        log.push(`${ENEMIES[enemy.type].name} 攻击 ${WARRIORS[target.type].name}，造成 ${Math.floor(damage)} 伤害`);
-        if (target.hp <= 0) {
-          myWarriors.shift();
-          log.push(`☠️ ${WARRIORS[target.type].name} 阵亡！`);
+      myWarriors = myWarriors.filter((w) => w.hp > 0);
+      enemies = enemies.filter((e) => e.hp > 0);
+
+      for (const pos of positionOrder) {
+        const enemiesAtPos = getUnitsByPosition(enemies, pos).filter((e) => e.hp > 0);
+        for (const enemy of enemiesAtPos) {
+          if (!myWarriors.some((w) => w.hp > 0)) break;
+          const eConfig = ENEMIES[enemy.type];
+
+          const target = findTarget(myWarriors);
+          if (!target) continue;
+
+          const wConfig = WARRIORS[target.type];
+          const counterBonus = getCounterBonus(eConfig.unitClass, wConfig.unitClass);
+          const moraleAtk = getMoraleMultiplier(enemyMorale);
+          const positionDefPenalty = target.position === 'front' ? 1 : target.position === 'middle' ? 1.1 : 1.25;
+          const wallProtection = target.position === 'front' ? wallDefense * 0.1 : target.position === 'middle' ? wallDefense * 0.05 : 0;
+
+          const baseDamage = enemy.attack * moraleAtk * positionDefPenalty;
+          const damageBeforeCounter = Math.max(1, baseDamage - target.defense * 0.5 - wallProtection);
+          const finalDamage = Math.max(1, Math.floor(damageBeforeCounter * (1 + counterBonus)));
+          target.hp -= finalDamage;
+
+          summary.totalDamageTaken += finalDamage;
+
+          let extraInfo = '';
+          if (counterBonus > 0.1) extraInfo = `（克制！+${Math.floor(counterBonus * 100)}%）`;
+          else if (counterBonus < -0.1) extraInfo = `（被克制 ${Math.floor(counterBonus * 100)}%）`;
+
+          addLog({
+            type: counterBonus > 0.1 ? 'crush' : 'attack',
+            round,
+            actor: eConfig.name,
+            actorIcon: eConfig.icon,
+            target: wConfig.name,
+            targetIcon: wConfig.icon,
+            value: finalDamage,
+            extra: extraInfo.trim(),
+            message: `🗡️ ${eConfig.icon}${eConfig.name} ➜ ${wConfig.icon}${wConfig.name} 造成 ${finalDamage} 伤害${extraInfo}`,
+          });
+
+          if (target.hp <= 0) {
+            target.hp = 0;
+            enemyMorale = Math.min(100, enemyMorale + 2);
+            armyMorale = Math.max(0, armyMorale - 5);
+            summary.moraleChanges -= 3;
+
+            addLog({
+              type: 'death',
+              round,
+              actor: eConfig.name,
+              actorIcon: eConfig.icon,
+              target: wConfig.name,
+              targetIcon: wConfig.icon,
+              message: `☠️ ${wConfig.icon}${wConfig.name} 阵亡！士气 -5`,
+            });
+          }
+        }
+      }
+
+      myWarriors = myWarriors.filter((w) => w.hp > 0);
+      enemies = enemies.filter((e) => e.hp > 0);
+
+      if (round > 2 && round % 3 === 0) {
+        const armyRatio = myWarriors.length / Math.max(1, state.warriors.length);
+        const enemyRatio = enemies.length / Math.max(1, invasion.enemies.length);
+        if (armyRatio < 0.5) {
+          armyMorale = Math.max(0, armyMorale - 2);
+          summary.moraleChanges -= 2;
+          addLog({
+            type: 'morale',
+            round,
+            actor: '我军',
+            actorIcon: '📉',
+            message: `😟 我军伤亡过半，士气下滑至 ${armyMorale}`,
+          });
+        }
+        if (enemyRatio < 0.5) {
+          enemyMorale = Math.max(0, enemyMorale - 3);
+          summary.moraleChanges += 3;
+          addLog({
+            type: 'morale',
+            round,
+            actor: '敌军',
+            actorIcon: '📈',
+            message: `😎 敌军损失惨重，士气下降至 ${enemyMorale}`,
+          });
         }
       }
     }
 
     const victory = enemies.length === 0 && myWarriors.length > 0;
-    log.push(victory ? '🏆 胜利！部落成功抵御入侵！' : '💔 失败...部落遭受重创');
+    const endMsg = victory
+      ? `🏆 胜利！部落成功抵御入侵！用时 ${round} 回合`
+      : `💔 失败...部落遭受重创。回合 ${round}`;
+    addLog({
+      type: 'system',
+      round,
+      actor: '系统',
+      actorIcon: victory ? '🏆' : '💔',
+      message: endMsg,
+    });
 
     const newLoyalty = Math.min(100, state.loyalty + (victory ? 5 : -8));
     const newPopulation = Math.max(0, state.population + (victory ? 0 : -1));
 
     if (victory) {
       state.addResources(invasion.rewards);
-      log.push(`获得奖励：${Object.entries(invasion.rewards).map(([k, v]) => `${k}+${v}`).join(', ')}`);
+      const rewardStr = Object.entries(invasion.rewards)
+        .map(([k, v]) => `${(state.resources as any)[k]?.icon || '📦'}${k}+${v}`)
+        .join(', ');
+      addLog({
+        type: 'system',
+        round,
+        actor: '战利品',
+        actorIcon: '🎁',
+        message: `🎁 获得奖励：${rewardStr}`,
+      });
+
+      const expGain = invasion.wave * 15;
+      for (const w of myWarriors) {
+        w.exp += expGain;
+        w.morale = Math.min(100, w.morale + 10);
+      }
     } else {
-      log.push(`人口因战败减少了 ${state.population - newPopulation} 人，忠诚下降`);
+      for (const w of myWarriors) {
+        w.morale = Math.max(20, w.morale - 15);
+      }
+      addLog({
+        type: 'system',
+        round,
+        actor: '系统',
+        actorIcon: '⚠️',
+        message: `⚠️ 人口 ${state.population} → ${newPopulation}，忠诚 ${state.loyalty} → ${newLoyalty}`,
+      });
     }
 
     set({
       warriors: myWarriors,
-      invasion: { ...invasion, isActive: false, enemies, result: victory ? 'victory' : 'defeat' },
+      invasion: {
+        ...invasion,
+        isActive: false,
+        enemies,
+        result: victory ? 'victory' : 'defeat',
+        battleLog: battleLogEntries,
+        battleSummary: summary,
+        armyMorale,
+        enemyMorale,
+      },
       totalWins: state.totalWins + (victory ? 1 : 0),
       totalLosses: state.totalLosses + (victory ? 0 : 1),
       loyalty: newLoyalty,
@@ -1509,7 +1832,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       state.updateTaskProgress('win_battles', 1);
     }
 
-    return { result: victory ? 'victory' : 'defeat', log };
+    return { result: victory ? 'victory' : 'defeat', log: stringLog, battleLog: battleLogEntries, battleSummary: summary };
   },
 
   executeTrade: (tradeId) => {
@@ -2106,16 +2429,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const expedition = state.activeExpedition;
     if (!expedition || expedition.status !== 'completed') return;
 
-    const returningWarriors = expedition.warriors.map((ew) => ({
-      id: ew.id,
-      type: ew.type,
-      hp: Math.floor(ew.hp),
-      maxHp: ew.maxHp,
-      attack: ew.attack,
-      defense: ew.defense,
-      level: ew.level,
-      exp: ew.exp,
-    }));
+    const returningWarriors = expedition.warriors.map((ew) => {
+      const config = WARRIORS[ew.type];
+      return {
+        id: ew.id,
+        type: ew.type,
+        hp: Math.floor(ew.hp),
+        maxHp: ew.maxHp,
+        attack: ew.attack,
+        defense: ew.defense,
+        level: ew.level,
+        exp: ew.exp,
+        position: config?.preferredPosition || 'middle',
+        morale: 70,
+      };
+    });
 
     const survivedCount = expedition.warriors.filter((w) => w.hp > 0).length;
     const totalCount = expedition.warriors.length + expedition.totalCasualties;
@@ -2158,16 +2486,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const expedition = state.activeExpedition;
     if (!expedition) return;
 
-    const returningWarriors = expedition.warriors.map((ew) => ({
-      id: ew.id,
-      type: ew.type,
-      hp: Math.floor(ew.hp),
-      maxHp: ew.maxHp,
-      attack: ew.attack,
-      defense: ew.defense,
-      level: ew.level,
-      exp: ew.exp,
-    }));
+    const returningWarriors = expedition.warriors.map((ew) => {
+      const config = WARRIORS[ew.type];
+      return {
+        id: ew.id,
+        type: ew.type,
+        hp: Math.floor(ew.hp),
+        maxHp: ew.maxHp,
+        attack: ew.attack,
+        defense: ew.defense,
+        level: ew.level,
+        exp: ew.exp,
+        position: config?.preferredPosition || 'middle',
+        morale: 70,
+      };
+    });
 
     const notification: ExpeditionNotification = {
       id: generateId(),

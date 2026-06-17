@@ -11,6 +11,8 @@ export const ENEMIES: Record<string, EnemyConfig> = {
     hp: 25,
     count: 3,
     reward: { food: 20, gold: 5 },
+    unitClass: 'infantry',
+    preferredPosition: 'front',
   },
   wolf: {
     id: 'wolf',
@@ -21,6 +23,8 @@ export const ENEMIES: Record<string, EnemyConfig> = {
     hp: 35,
     count: 4,
     reward: { food: 40, wood: 10 },
+    unitClass: 'cavalry',
+    preferredPosition: 'front',
   },
   troll: {
     id: 'troll',
@@ -31,6 +35,8 @@ export const ENEMIES: Record<string, EnemyConfig> = {
     hp: 80,
     count: 2,
     reward: { stone: 50, iron: 10 },
+    unitClass: 'infantry',
+    preferredPosition: 'front',
   },
   orc: {
     id: 'orc',
@@ -41,6 +47,8 @@ export const ENEMIES: Record<string, EnemyConfig> = {
     hp: 100,
     count: 3,
     reward: { gold: 60, iron: 20, food: 50 },
+    unitClass: 'infantry',
+    preferredPosition: 'middle',
   },
   dragon: {
     id: 'dragon',
@@ -51,6 +59,8 @@ export const ENEMIES: Record<string, EnemyConfig> = {
     hp: 300,
     count: 1,
     reward: { gold: 200, iron: 80, food: 150 },
+    unitClass: 'hero',
+    preferredPosition: 'back',
   },
 };
 

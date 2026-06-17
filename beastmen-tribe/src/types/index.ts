@@ -106,6 +106,38 @@ export interface BuildingStorageInfo {
 
 export type WarriorType = 'grunt' | 'archer' | 'shaman' | 'berserker' | 'warlord';
 
+export type UnitClass = 'infantry' | 'ranged' | 'cavalry' | 'support' | 'hero';
+
+export type PositionRow = 'front' | 'middle' | 'back';
+
+export type BattleLogType = 
+  | 'attack' 
+  | 'counter' 
+  | 'kill' 
+  | 'death' 
+  | 'heal' 
+  | 'buff' 
+  | 'debuff' 
+  | 'morale' 
+  | 'round' 
+  | 'system'
+  | 'counter_attack'
+  | 'critical'
+  | 'crush';
+
+export interface BattleLogEntry {
+  id: string;
+  type: BattleLogType;
+  round: number;
+  actor: string;
+  actorIcon: string;
+  target?: string;
+  targetIcon?: string;
+  value?: number;
+  extra?: string;
+  message: string;
+}
+
 export interface WarriorConfig {
   id: WarriorType;
   name: string;
@@ -116,6 +148,11 @@ export interface WarriorConfig {
   attack: number;
   defense: number;
   hp: number;
+  unitClass: UnitClass;
+  preferredPosition: PositionRow;
+  healPower?: number;
+  moraleBonus?: number;
+  counterRate?: number;
   requires?: { building: BuildingType; level: number };
 }
 
@@ -128,6 +165,8 @@ export interface Warrior {
   defense: number;
   level: number;
   exp: number;
+  position: PositionRow;
+  morale: number;
 }
 
 export interface TrainingQueue {
@@ -148,6 +187,8 @@ export interface EnemyConfig {
   hp: number;
   count: number;
   reward: Partial<Resources>;
+  unitClass: UnitClass;
+  preferredPosition: PositionRow;
 }
 
 export interface Enemy {
@@ -157,6 +198,20 @@ export interface Enemy {
   maxHp: number;
   attack: number;
   defense: number;
+  position: PositionRow;
+  morale: number;
+}
+
+export interface BattleSummary {
+  totalDamageDealt: number;
+  totalDamageTaken: number;
+  totalHealing: number;
+  killsByUnit: Record<string, number>;
+  highestDamage: { name: string; value: number };
+  mostKills: { name: string; value: number };
+  moraleChanges: number;
+  countersTriggered: number;
+  criticalHits: number;
 }
 
 export interface Invasion {
@@ -167,6 +222,10 @@ export interface Invasion {
   countdown: number;
   rewards: Partial<Resources>;
   result: 'pending' | 'victory' | 'defeat';
+  battleLog?: BattleLogEntry[];
+  battleSummary?: BattleSummary;
+  armyMorale: number;
+  enemyMorale: number;
 }
 
 export type TradeType = 'buy' | 'sell';

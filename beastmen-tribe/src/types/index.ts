@@ -227,6 +227,56 @@ export interface WarriorConfig {
   requires?: { building: BuildingType; level: number };
 }
 
+export interface Weapon {
+  type: WeaponType;
+  name: string;
+  icon: string;
+  durability: number;
+  maxDurability: number;
+  attackBonus: number;
+  defenseBonus: number;
+  ironCost: number;
+  repairCost: number;
+  maintenanceCost: number;
+}
+
+export type WeaponType = 'axe' | 'bow' | 'spear' | 'hammer' | 'sword' | 'staff';
+
+export interface WeaponConfig {
+  id: WeaponType;
+  name: string;
+  icon: string;
+  maxDurability: number;
+  attackBonus: number;
+  defenseBonus: number;
+  ironCost: number;
+  repairCost: number;
+  maintenanceCost: number;
+  requires?: { building: BuildingType; level: number };
+  warriorTypes: WarriorType[];
+}
+
+export interface ArsenalState {
+  weapons: Record<WarriorType, WeaponConfig>;
+  lastMaintenanceDay: number;
+  maintenanceInterval: number;
+  autoRepair: boolean;
+  autoMaintenance: boolean;
+  supplyLineStatus: SupplyLineStatus;
+  supplyEfficiency: number;
+}
+
+export type SupplyLineStatus = 'normal' | 'disrupted' | 'boosted';
+
+export interface SupplyLogEntry {
+  id: string;
+  type: 'maintenance' | 'repair' | 'deploy' | 'battle' | 'supply';
+  message: string;
+  ironConsumed: number;
+  timestamp: number;
+  day: number;
+}
+
 export interface Warrior {
   id: string;
   type: WarriorType;
@@ -238,6 +288,7 @@ export interface Warrior {
   exp: number;
   position: PositionRow;
   morale: number;
+  weapon?: Weapon;
 }
 
 export interface TrainingQueue {
@@ -1458,6 +1509,9 @@ export interface GameState {
   blackMarketRefreshInterval: number;
   buildQueue: BuildQueueItem[];
   maxBuildQueueSize: number;
+
+  arsenal: ArsenalState;
+  supplyLogs: SupplyLogEntry[];
 
   milestone: MilestoneState;
 }

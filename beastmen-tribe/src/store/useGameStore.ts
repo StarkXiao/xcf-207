@@ -48,6 +48,10 @@ import type {
   MilestoneConfig,
   MilestoneRedDot,
   MilestoneState,
+  WeaponConfig,
+  WeaponType,
+  SupplyLogEntry,
+  SupplyLineStatus,
 } from '../types';
 import {
   getSaveSlotInfos,
@@ -172,6 +176,23 @@ import {
   refreshStocks,
   updatePriceFluctuations,
 } from '../data/trades';
+import {
+  WEAPONS,
+  createWeapon,
+  createInitialArsenalState,
+  getWeaponConfigForWarrior,
+  calculateDeploymentCost,
+  calculateMaintenanceCost,
+  calculateRepairCost,
+  calculateTotalRepairCost,
+  applyBattleDurabilityLoss,
+  getWeaponEfficiency,
+  repairWeapon,
+  maintainWeapon,
+  getSupplyLineModifier,
+  canEquipWeapon,
+  REPAIR_EFFICIENCY_THRESHOLD,
+} from '../data/arsenal';
 import type {
   ResourceType,
   ResourceCapacity,
@@ -664,6 +685,8 @@ const createInitialState = (): GameState => {
     blackMarketRefreshInterval: 120,
     buildQueue: [],
     maxBuildQueueSize: 3,
+    arsenal: createInitialArsenalState(),
+    supplyLogs: [],
     milestone: createInitialMilestoneState(),
   };
 };
@@ -1166,6 +1189,14 @@ const hydrateGameState = (parsed: GameState): GameState => {
   state.buildQueue = parsed.buildQueue || [];
   state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
 
+  state.arsenal = parsed.arsenal
+    ? {
+        ...createInitialArsenalState(),
+        ...parsed.arsenal,
+      }
+    : createInitialArsenalState();
+  state.supplyLogs = parsed.supplyLogs || [];
+
   const hydratedThLevel = getTownhallLevel(state.buildings);
   state.milestone = parsed.milestone
     ? {
@@ -1386,6 +1417,23 @@ interface GameStore extends GameState {
   getUpgradeHints: () => BuildingUpgradeHint[];
   getUnlockableBuildings: () => BuildingType[];
   checkBuildingRequirements: (type: BuildingType) => { met: boolean; missing: BuildingRequirement[] };
+
+  equipWeaponToWarrior: (warriorId: string, weaponType: WeaponType) => { success: boolean; message: string; ironCost: number };
+  repairWarriorWeapon: (warriorId: string) => { success: boolean; message: string; ironCost: number };
+  repairAllWeapons: () => { success: boolean; message: string; totalIronCost: number };
+  performMaintenance: () => { success: boolean; message: string; totalIronCost: number };
+  checkDeploymentCost: () => { canDeploy: boolean; cost: number; reason?: string };
+  payDeploymentCost: () => { success: boolean; message: string; ironCost: number };
+  getDeploymentCost: () => number;
+  getMaintenanceCost: () => number;
+  getTotalRepairCost: () => number;
+  getWeaponConfig: (warriorType: WarriorType) => WeaponConfig | null;
+  toggleAutoRepair: () => void;
+  toggleAutoMaintenance: () => void;
+  setSupplyLineStatus: (status: SupplyLineStatus) => void;
+  addSupplyLog: (type: SupplyLogEntry['type'], message: string, ironConsumed: number) => void;
+  getSupplyLineEfficiency: () => { costMod: number; efficiencyMod: number };
+  processSupplyTick: (delta: number) => void;
 
   getCurrentMilestone: () => MilestoneConfig | undefined;
   getNextMilestone: () => MilestoneConfig | null;
@@ -1780,6 +1828,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       actualCost[key as keyof Resources] = Math.floor((amount as number) * (1 + trainCostBonus));
     }
 
+    const weaponConfig = getWeaponConfigForWarrior(type);
+    if (weaponConfig) {
+      const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+      const weaponIronCost = Math.ceil(weaponConfig.ironCost * costMod);
+      actualCost.iron = (actualCost.iron || 0) + weaponIronCost;
+    }
+
     if (!state.spendResources(actualCost)) return false;
 
     const existingQueue = state.trainingQueue.find((q) => q.type === type);
@@ -1828,6 +1883,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         newProgress -= queue.total;
         newCount--;
         const config = WARRIORS[queue.type];
+        const weapon = createWeapon(queue.type);
         completed.push({
           id: generateId(),
           type: queue.type,
@@ -1839,6 +1895,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           exp: 0,
           position: config.preferredPosition,
           morale: 70,
+          weapon: weapon || undefined,
         });
       }
 
@@ -2031,6 +2088,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
       stringLog.push(full.message);
     };
 
+    const deployCheck = state.checkDeploymentCost();
+    if (!deployCheck.canDeploy) {
+      return {
+        result: 'defeat' as const,
+        log: [deployCheck.reason || '军备不足，无法出战'],
+        battleLog: [],
+        battleSummary: null as any,
+      };
+    }
+    state.payDeploymentCost();
+
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
     let wallDurability = { ...invasion.wallDurability };
@@ -2095,10 +2163,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const defBonus = defTechBonus + defTotemBonus + defGovBonus;
       const hpBonus = hpTechBonus + hpTotemBonus + hpGovBonus;
 
+      let weaponAtkBonus = 0;
+      let weaponDefBonus = 0;
+      let weaponEfficiency = 1;
+      if (w.weapon) {
+        weaponEfficiency = getWeaponEfficiency(w.weapon);
+        weaponAtkBonus = w.weapon.attackBonus;
+        weaponDefBonus = w.weapon.defenseBonus;
+      }
+
       return {
         ...w,
-        attack: Math.floor(w.attack * (1 + atkBonus)),
-        defense: Math.floor(w.defense * (1 + defBonus)),
+        attack: Math.floor((w.attack + weaponAtkBonus) * (1 + atkBonus) * weaponEfficiency),
+        defense: Math.floor((w.defense + weaponDefBonus) * (1 + defBonus) * weaponEfficiency),
         maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
         hp: Math.floor(w.hp * (1 + hpBonus)),
         morale: w.morale + (config?.moraleBonus || 0),
@@ -2670,6 +2747,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
         message: `⚠️ 人口 ${state.population} → ${newPopulation}，忠诚 ${state.loyalty} → ${newLoyalty}${compensationLoyaltyMitigation > 0 ? `（补偿减免 +${compensationLoyaltyMitigation}）` : ''}`,
       });
     }
+
+    let totalDurabilityLoss = 0;
+    const warriorsWithDurability = myWarriors.map(w => {
+      const originalWarrior = state.warriors.find(ow => ow.id === w.id);
+      if (!originalWarrior?.weapon) return w;
+
+      const durabilityLoss = applyBattleDurabilityLoss(originalWarrior, victory);
+      totalDurabilityLoss += durabilityLoss;
+
+      return {
+        ...w,
+        weapon: originalWarrior.weapon,
+      };
+    });
+
+    if (totalDurabilityLoss > 0) {
+      state.addSupplyLog('battle', `战斗中武器耐久度损失总计 ${totalDurabilityLoss}`, 0);
+    }
+
+    if (state.arsenal.autoRepair && victory) {
+      const repairCost = calculateTotalRepairCost(warriorsWithDurability);
+      const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+      const totalRepairCost = Math.ceil(repairCost * costMod);
+      if (totalRepairCost > 0 && state.canAfford({ iron: totalRepairCost })) {
+        state.spendResources({ iron: totalRepairCost });
+        warriorsWithDurability.forEach(w => {
+          if (w.weapon) {
+            w.weapon.durability = w.weapon.maxDurability;
+          }
+        });
+        state.addSupplyLog('repair', `战后自动修复所有武器，消耗铁矿 ${totalRepairCost}`, totalRepairCost);
+      }
+    }
+
+    myWarriors = warriorsWithDurability;
 
     set({
       warriors: myWarriors,
@@ -5941,6 +6053,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processPriceFluctuationTick(delta);
     state.processStockRefreshTick(delta);
     state.processBuildQueue(delta);
+    state.processSupplyTick(delta);
     state.processMilestoneCheck();
 
     const ending = state.checkForEnding();
@@ -7147,6 +7260,264 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const thLevel = getTownhallLevel(state.buildings);
     return getWarriorsToUnlockInNextMilestone(thLevel);
+  },
+
+  equipWeaponToWarrior: (warriorId, weaponType) => {
+    const state = get();
+    const warrior = state.warriors.find(w => w.id === warriorId);
+    if (!warrior) {
+      return { success: false, message: '战士不存在', ironCost: 0 };
+    }
+
+    if (!canEquipWeapon(warrior.type, weaponType, state.buildings)) {
+      return { success: false, message: '无法装备该武器', ironCost: 0 };
+    }
+
+    const config = WEAPONS[weaponType];
+    if (!config) {
+      return { success: false, message: '武器配置不存在', ironCost: 0 };
+    }
+
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    const ironCost = Math.ceil(config.ironCost * costMod);
+
+    if (!state.canAfford({ iron: ironCost })) {
+      return { success: false, message: `铁矿不足，需要 ${ironCost} 铁矿`, ironCost };
+    }
+
+    state.spendResources({ iron: ironCost });
+
+    const newWeapon = createWeapon(warrior.type);
+    if (newWeapon) {
+      const updatedWarriors = state.warriors.map(w =>
+        w.id === warriorId ? { ...w, weapon: newWeapon } : w
+      );
+      set({ warriors: updatedWarriors });
+      state.addSupplyLog('supply', `为 ${WARRIORS[warrior.type].name} 装备了 ${config.name}`, ironCost);
+      return { success: true, message: `成功装备 ${config.name}`, ironCost };
+    }
+
+    return { success: false, message: '创建武器失败', ironCost: 0 };
+  },
+
+  repairWarriorWeapon: (warriorId) => {
+    const state = get();
+    const warrior = state.warriors.find(w => w.id === warriorId);
+    if (!warrior) {
+      return { success: false, message: '战士不存在', ironCost: 0 };
+    }
+
+    const cost = calculateRepairCost(warrior);
+    if (cost === 0) {
+      return { success: false, message: '武器无需修复', ironCost: 0 };
+    }
+
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    const finalCost = Math.ceil(cost * costMod);
+
+    if (!state.canAfford({ iron: finalCost })) {
+      return { success: false, message: `铁矿不足，需要 ${finalCost} 铁矿`, ironCost: finalCost };
+    }
+
+    state.spendResources({ iron: finalCost });
+    const result = repairWeapon(warrior);
+
+    if (result.success) {
+      const updatedWarriors = state.warriors.map(w =>
+        w.id === warriorId ? { ...warrior } : w
+      );
+      set({ warriors: updatedWarriors });
+      state.addSupplyLog('repair', result.message, finalCost);
+    }
+
+    return { success: result.success, message: result.message, ironCost: finalCost };
+  },
+
+  repairAllWeapons: () => {
+    const state = get();
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    const totalCost = Math.ceil(calculateTotalRepairCost(state.warriors) * costMod);
+
+    if (totalCost === 0) {
+      return { success: false, message: '所有武器状态良好', totalIronCost: 0 };
+    }
+
+    if (!state.canAfford({ iron: totalCost })) {
+      return { success: false, message: `铁矿不足，需要 ${totalCost} 铁矿`, totalIronCost: totalCost };
+    }
+
+    state.spendResources({ iron: totalCost });
+    const updatedWarriors = state.warriors.map(w => {
+      if (w.weapon && w.weapon.durability < w.weapon.maxDurability) {
+        return { ...w, weapon: { ...w.weapon, durability: w.weapon.maxDurability } };
+      }
+      return w;
+    });
+
+    set({ warriors: updatedWarriors });
+    state.addSupplyLog('repair', `修复了所有武器，共 ${updatedWarriors.length} 件`, totalCost);
+    return { success: true, message: `成功修复所有武器`, totalIronCost: totalCost };
+  },
+
+  performMaintenance: () => {
+    const state = get();
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    const totalCost = Math.ceil(calculateMaintenanceCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
+
+    if (!state.canAfford({ iron: totalCost })) {
+      return { success: false, message: `铁矿不足，需要 ${totalCost} 铁矿`, totalIronCost: totalCost };
+    }
+
+    state.spendResources({ iron: totalCost });
+
+    const updatedWarriors = state.warriors.map(w => {
+      if (w.weapon) {
+        const { efficiency } = maintainWeapon(w);
+        if (efficiency < 1) {
+          return { ...w };
+        }
+      }
+      return w;
+    });
+
+    set({
+      warriors: updatedWarriors,
+      arsenal: {
+        ...state.arsenal,
+        lastMaintenanceDay: state.day,
+      }
+    });
+
+    state.addSupplyLog('maintenance', `完成全军武器维护，共 ${updatedWarriors.length} 件`, totalCost);
+    return { success: true, message: `武器维护完成`, totalIronCost: totalCost };
+  },
+
+  checkDeploymentCost: () => {
+    const state = get();
+    if (state.warriors.length === 0) {
+      return { canDeploy: false, cost: 0, reason: '没有可出战的战士' };
+    }
+
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    const cost = Math.ceil(calculateDeploymentCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
+
+    if (!state.canAfford({ iron: cost })) {
+      return { canDeploy: false, cost, reason: `铁矿不足，需要 ${cost} 铁矿作为出战军备` };
+    }
+
+    return { canDeploy: true, cost };
+  },
+
+  payDeploymentCost: () => {
+    const state = get();
+    const check = state.checkDeploymentCost();
+    if (!check.canDeploy) {
+      return { success: false, message: check.reason || '无法出战', ironCost: check.cost };
+    }
+
+    state.spendResources({ iron: check.cost });
+    state.addSupplyLog('deploy', `支付出战军备费用，共 ${state.warriors.length} 名战士`, check.cost);
+    return { success: true, message: `军备补给已到位`, ironCost: check.cost };
+  },
+
+  getDeploymentCost: () => {
+    const state = get();
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    return Math.ceil(calculateDeploymentCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
+  },
+
+  getMaintenanceCost: () => {
+    const state = get();
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    return Math.ceil(calculateMaintenanceCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
+  },
+
+  getTotalRepairCost: () => {
+    const state = get();
+    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
+    return Math.ceil(calculateTotalRepairCost(state.warriors) * costMod);
+  },
+
+  getWeaponConfig: (warriorType) => {
+    return getWeaponConfigForWarrior(warriorType);
+  },
+
+  toggleAutoRepair: () => {
+    const state = get();
+    set({
+      arsenal: {
+        ...state.arsenal,
+        autoRepair: !state.arsenal.autoRepair,
+      }
+    });
+  },
+
+  toggleAutoMaintenance: () => {
+    const state = get();
+    set({
+      arsenal: {
+        ...state.arsenal,
+        autoMaintenance: !state.arsenal.autoMaintenance,
+      }
+    });
+  },
+
+  setSupplyLineStatus: (status) => {
+    const state = get();
+    set({
+      arsenal: {
+        ...state.arsenal,
+        supplyLineStatus: status,
+      }
+    });
+    state.addSupplyLog('supply', `补给线状态变更为: ${status}`, 0);
+  },
+
+  addSupplyLog: (type, message, ironConsumed) => {
+    const state = get();
+    const newLog: SupplyLogEntry = {
+      id: generateId(),
+      type,
+      message,
+      ironConsumed,
+      timestamp: Date.now(),
+      day: state.day,
+    };
+
+    const updatedLogs = [newLog, ...state.supplyLogs].slice(0, 50);
+    set({ supplyLogs: updatedLogs });
+  },
+
+  getSupplyLineEfficiency: () => {
+    const state = get();
+    return getSupplyLineModifier(state.arsenal.supplyLineStatus);
+  },
+
+  processSupplyTick: (_delta) => {
+    const state = get();
+    const arsenal = state.arsenal;
+
+    const daysSinceLastMaintenance = state.day - arsenal.lastMaintenanceDay;
+    if (arsenal.autoMaintenance && daysSinceLastMaintenance >= arsenal.maintenanceInterval) {
+      const maintenanceCost = state.getMaintenanceCost();
+      if (state.canAfford({ iron: maintenanceCost })) {
+        state.performMaintenance();
+      }
+    }
+
+    if (arsenal.autoRepair) {
+      const damagedWarriors = state.warriors.filter(w =>
+        w.weapon && w.weapon.durability / w.weapon.maxDurability < REPAIR_EFFICIENCY_THRESHOLD
+      );
+      if (damagedWarriors.length > 0) {
+        const repairCost = damagedWarriors.reduce((sum, w) => sum + calculateRepairCost(w), 0);
+        const { costMod } = getSupplyLineModifier(arsenal.supplyLineStatus);
+        const totalCost = Math.ceil(repairCost * costMod);
+        if (state.canAfford({ iron: totalCost })) {
+          state.repairAllWeapons();
+        }
+      }
+    }
   },
 
   getAllMilestones: () => {

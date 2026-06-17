@@ -45,6 +45,9 @@ import type {
   PositionRow,
   SaveSlotInfo,
   LoadSaveResult,
+  MilestoneConfig,
+  MilestoneRedDot,
+  MilestoneState,
 } from '../types';
 import {
   getSaveSlotInfos,
@@ -61,6 +64,22 @@ import {
   markSlotCorrupted as markSlotCorruptedManager,
 } from '../utils/saveManager';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity, checkBuildingRequirements as checkBuildReqs, getBuildTime, getUpgradeTime, getProductionEstimate as getProdEstimate, getUpgradeHints as getUpgHints, getUnlockableBuildings as getUnlockableBldgs, getRequirementDescription } from '../data/buildings';
+import {
+  MILESTONES,
+  getMilestoneByLevel,
+  getTownhallLevel,
+  getUnlockedBuildingsByMilestones,
+  getUnlockedWarriorsByMilestones,
+  getUnlockedPanelsByMilestones,
+  getPendingRedDots,
+  getPanelHasRedDot,
+  getBuildingHasRedDot,
+  getWarriorHasRedDot,
+  getNextMilestone,
+  getMilestoneProgress,
+  getBuildingsToUnlockInNextMilestone,
+  getWarriorsToUnlockInNextMilestone,
+} from '../data/milestones';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
 import { generateTrades } from '../data/trades';
@@ -543,6 +562,14 @@ const calculateRecruitEfficiency = (loyalty: number, activeEvents: ActiveTribeEv
   return Math.max(0.2, Math.min(2.0, efficiency));
 };
 
+const createInitialMilestoneState = (): MilestoneState => ({
+  claimedMilestones: ['th_1'],
+  dismissedRedDots: [],
+  pendingMilestonePopup: null,
+  eventMilestoneTriggers: [],
+  lastTownhallLevel: 1,
+});
+
 const createInitialState = (): GameState => {
   const initialBuildings: Building[] = [
     {
@@ -565,6 +592,8 @@ const createInitialState = (): GameState => {
   ];
 
   const initialFactions = createInitialFactions();
+  const initialThLevel = 1;
+
   return {
     tribeName: '血牙部落',
     day: 1,
@@ -580,8 +609,8 @@ const createInitialState = (): GameState => {
     trainingQueue: [],
     invasion: null,
     trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1),
-    unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall', 'totem_altar'],
-    unlockedWarriors: ['grunt'],
+    unlockedBuildings: getUnlockedBuildingsByMilestones(initialThLevel),
+    unlockedWarriors: getUnlockedWarriorsByMilestones(initialThLevel),
     selectedBuildingId: null,
     lastSave: Date.now(),
     totalWins: 0,
@@ -634,6 +663,7 @@ const createInitialState = (): GameState => {
     blackMarketRefreshInterval: 120,
     buildQueue: [],
     maxBuildQueueSize: 3,
+    milestone: createInitialMilestoneState(),
   };
 };
 
@@ -1135,6 +1165,31 @@ const hydrateGameState = (parsed: GameState): GameState => {
   state.buildQueue = parsed.buildQueue || [];
   state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
 
+  const hydratedThLevel = getTownhallLevel(state.buildings);
+  state.milestone = parsed.milestone
+    ? {
+        ...createInitialMilestoneState(),
+        ...parsed.milestone,
+        claimedMilestones: parsed.milestone.claimedMilestones || [],
+        dismissedRedDots: parsed.milestone.dismissedRedDots || [],
+        eventMilestoneTriggers: parsed.milestone.eventMilestoneTriggers || [],
+      }
+    : createInitialMilestoneState();
+
+  const milestoneBuildings = getUnlockedBuildingsByMilestones(hydratedThLevel);
+  for (const b of milestoneBuildings) {
+    if (!state.unlockedBuildings.includes(b)) {
+      state.unlockedBuildings.push(b);
+    }
+  }
+  const milestoneWarriors = getUnlockedWarriorsByMilestones(hydratedThLevel);
+  for (const w of milestoneWarriors) {
+    if (!state.unlockedWarriors.includes(w)) {
+      state.unlockedWarriors.push(w);
+    }
+  }
+  state.milestone.lastTownhallLevel = hydratedThLevel;
+
   return state;
 };
 
@@ -1329,6 +1384,23 @@ interface GameStore extends GameState {
   getUpgradeHints: () => BuildingUpgradeHint[];
   getUnlockableBuildings: () => BuildingType[];
   checkBuildingRequirements: (type: BuildingType) => { met: boolean; missing: BuildingRequirement[] };
+
+  getCurrentMilestone: () => MilestoneConfig | undefined;
+  getNextMilestone: () => MilestoneConfig | null;
+  getMilestoneProgress: () => { current: MilestoneConfig | undefined; next: MilestoneConfig | null; progress: number };
+  getPendingRedDots: () => MilestoneRedDot[];
+  getPanelHasRedDot: (panelId: string) => boolean;
+  getBuildingHasRedDot: (buildingType: string) => boolean;
+  getWarriorHasRedDot: (warriorType: string) => boolean;
+  dismissRedDot: (milestoneId: string, dotType: string, dotTarget: string) => void;
+  claimMilestonePopup: () => void;
+  closeMilestonePopup: () => void;
+  processMilestoneCheck: () => void;
+  getUnlockedPanels: () => string[];
+  getBuildingsToUnlockNext: () => BuildingType[];
+  getWarriorsToUnlockNext: () => WarriorType[];
+  getAllMilestones: () => MilestoneConfig[];
+  isMilestoneClaimed: (milestoneId: string) => boolean;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -5865,6 +5937,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processPriceFluctuationTick(delta);
     state.processStockRefreshTick(delta);
     state.processBuildQueue(delta);
+    state.processMilestoneCheck();
 
     const ending = state.checkForEnding();
     if (ending) {
@@ -6154,6 +6227,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let newBuildings = [...state.buildings];
     let newUnlocked = [...state.unlockedBuildings];
+    let newUnlockedWarriors = [...state.unlockedWarriors];
+    let newMilestone = { ...state.milestone };
 
     for (const item of completedItems) {
       if (item.type === 'build' && item.x !== undefined && item.y !== undefined) {
@@ -6184,6 +6259,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
         state.updateTaskProgress('build_buildings', 1, item.buildingType);
       } else if (item.type === 'upgrade' && item.buildingId) {
+        
         newBuildings = newBuildings.map((b) => {
           if (b.id !== item.buildingId) return b;
           return { ...b, level: item.targetLevel, isBuilding: false, buildProgress: 100 };
@@ -6197,6 +6273,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
               if (!newUnlocked.includes(bType)) {
                 newUnlocked.push(bType);
               }
+            }
+            
+            const thLevel = building.level;
+            const milestoneBuildings = getUnlockedBuildingsByMilestones(thLevel);
+            for (const bType of milestoneBuildings) {
+              if (!newUnlocked.includes(bType)) {
+                newUnlocked.push(bType);
+              }
+            }
+            const milestoneWarriors = getUnlockedWarriorsByMilestones(thLevel);
+            for (const wType of milestoneWarriors) {
+              if (!newUnlockedWarriors.includes(wType)) {
+                newUnlockedWarriors.push(wType);
+              }
+            }
+            
+            const milestone = getMilestoneByLevel(thLevel);
+            if (milestone && !newMilestone.claimedMilestones.includes(milestone.id)) {
+              newMilestone.pendingMilestonePopup = milestone;
             }
           }
         }
@@ -6219,10 +6314,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         buildQueue: newQueue,
         buildings: newBuildings,
         unlockedBuildings: newUnlocked,
+        unlockedWarriors: newUnlockedWarriors,
         maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
         resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
         resources: calculateTotalResources(newBuildings),
         totem: newTotem,
+        milestone: newMilestone,
       });
     } else if (newQueue[0]?.progress !== state.buildQueue[0]?.progress) {
       set({ buildQueue: newQueue });
@@ -6854,6 +6951,185 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
     });
     return true;
+  },
+
+  getCurrentMilestone: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getMilestoneByLevel(thLevel);
+  },
+
+  getNextMilestone: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getNextMilestone(thLevel);
+  },
+
+  getMilestoneProgress: () => {
+    const state = get();
+    return getMilestoneProgress(state);
+  },
+
+  getPendingRedDots: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getPendingRedDots(
+      thLevel,
+      state.milestone.claimedMilestones,
+      state.milestone.dismissedRedDots
+    );
+  },
+
+  getPanelHasRedDot: (panelId) => {
+    const state = get();
+    const pendingDots = getPendingRedDots(
+      getTownhallLevel(state.buildings),
+      state.milestone.claimedMilestones,
+      state.milestone.dismissedRedDots
+    );
+    return getPanelHasRedDot(panelId, pendingDots);
+  },
+
+  getBuildingHasRedDot: (buildingType) => {
+    const state = get();
+    const pendingDots = getPendingRedDots(
+      getTownhallLevel(state.buildings),
+      state.milestone.claimedMilestones,
+      state.milestone.dismissedRedDots
+    );
+    return getBuildingHasRedDot(buildingType, pendingDots);
+  },
+
+  getWarriorHasRedDot: (warriorType) => {
+    const state = get();
+    const pendingDots = getPendingRedDots(
+      getTownhallLevel(state.buildings),
+      state.milestone.claimedMilestones,
+      state.milestone.dismissedRedDots
+    );
+    return getWarriorHasRedDot(warriorType, pendingDots);
+  },
+
+  dismissRedDot: (milestoneId, dotType, dotTarget) => {
+    const state = get();
+    const dotId = `${milestoneId}_${dotType}_${dotTarget}`;
+    if (!state.milestone.dismissedRedDots.includes(dotId)) {
+      set({
+        milestone: {
+          ...state.milestone,
+          dismissedRedDots: [...state.milestone.dismissedRedDots, dotId],
+        },
+      });
+    }
+  },
+
+  claimMilestonePopup: () => {
+    const state = get();
+    const popup = state.milestone.pendingMilestonePopup;
+    if (!popup) return;
+
+    if (Object.keys(popup.rewards).length > 0) {
+      state.addResources(popup.rewards);
+    }
+
+    set({
+      milestone: {
+        ...state.milestone,
+        claimedMilestones: [...state.milestone.claimedMilestones, popup.id],
+        pendingMilestonePopup: null,
+        eventMilestoneTriggers: [
+          ...state.milestone.eventMilestoneTriggers,
+          ...popup.triggerEvents,
+        ],
+        lastTownhallLevel: popup.townhallLevel,
+      },
+    });
+  },
+
+  closeMilestonePopup: () => {
+    const state = get();
+    const popup = state.milestone.pendingMilestonePopup;
+    if (!popup) return;
+
+    set({
+      milestone: {
+        ...state.milestone,
+        pendingMilestonePopup: null,
+      },
+    });
+  },
+
+  processMilestoneCheck: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    const lastLevel = state.milestone.lastTownhallLevel;
+    
+    if (thLevel <= lastLevel) return;
+
+    const newUnlockedBuildings = [...state.unlockedBuildings];
+    const newUnlockedWarriors = [...state.unlockedWarriors];
+
+    for (let level = lastLevel + 1; level <= thLevel; level++) {
+      const milestoneBuildings = getUnlockedBuildingsByMilestones(level);
+      for (const b of milestoneBuildings) {
+        if (!newUnlockedBuildings.includes(b)) {
+          newUnlockedBuildings.push(b);
+        }
+      }
+      const milestoneWarriors = getUnlockedWarriorsByMilestones(level);
+      for (const w of milestoneWarriors) {
+        if (!newUnlockedWarriors.includes(w)) {
+          newUnlockedWarriors.push(w);
+        }
+      }
+    }
+
+    const currentMilestone = getMilestoneByLevel(thLevel);
+    let pendingPopup = state.milestone.pendingMilestonePopup;
+    if (
+      currentMilestone &&
+      !state.milestone.claimedMilestones.includes(currentMilestone.id) &&
+      !pendingPopup
+    ) {
+      pendingPopup = currentMilestone;
+    }
+
+    set({
+      unlockedBuildings: newUnlockedBuildings,
+      unlockedWarriors: newUnlockedWarriors,
+      milestone: {
+        ...state.milestone,
+        pendingMilestonePopup: pendingPopup,
+        lastTownhallLevel: thLevel,
+      },
+    });
+  },
+
+  getUnlockedPanels: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getUnlockedPanelsByMilestones(thLevel);
+  },
+
+  getBuildingsToUnlockNext: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getBuildingsToUnlockInNextMilestone(thLevel);
+  },
+
+  getWarriorsToUnlockNext: () => {
+    const state = get();
+    const thLevel = getTownhallLevel(state.buildings);
+    return getWarriorsToUnlockInNextMilestone(thLevel);
+  },
+
+  getAllMilestones: () => {
+    return MILESTONES;
+  },
+
+  isMilestoneClaimed: (milestoneId) => {
+    const state = get();
+    return state.milestone.claimedMilestones.includes(milestoneId);
   },
 }));
 

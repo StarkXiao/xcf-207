@@ -1445,4 +1445,36 @@ export interface GameState {
   blackMarketRefreshInterval: number;
   buildQueue: BuildQueueItem[];
   maxBuildQueueSize: number;
+
+  milestone: MilestoneState;
+}
+
+export type RedDotType = 'panel' | 'building' | 'warrior' | 'milestone' | 'tech' | 'event';
+
+export interface MilestoneRedDot {
+  type: RedDotType;
+  target: string;
+  message: string;
+}
+
+export interface MilestoneConfig {
+  id: string;
+  townhallLevel: number;
+  name: string;
+  description: string;
+  icon: string;
+  unlockBuildings: BuildingType[];
+  unlockWarriors: WarriorType[];
+  unlockPanels: string[];
+  triggerEvents: string[];
+  redDots: MilestoneRedDot[];
+  rewards: Partial<Resources>;
+}
+
+export interface MilestoneState {
+  claimedMilestones: string[];
+  dismissedRedDots: string[];
+  pendingMilestonePopup: MilestoneConfig | null;
+  eventMilestoneTriggers: string[];
+  lastTownhallLevel: number;
 }

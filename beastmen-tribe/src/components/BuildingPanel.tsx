@@ -23,16 +23,27 @@ export function BuildingPanel({ gameRef }: Props) {
   const getUpgradeHints = useGameStore((s) => s.getUpgradeHints);
   const getUnlockableBuildings = useGameStore((s) => s.getUnlockableBuildings);
   const checkBuildingRequirements = useGameStore((s) => s.checkBuildingRequirements);
+  const getBuildingHasRedDot = useGameStore((s) => s.getBuildingHasRedDot);
+  const getCurrentMilestone = useGameStore((s) => s.getCurrentMilestone);
+  const dismissRedDot = useGameStore((s) => s.dismissRedDot);
+  const getBuildingsToUnlockNext = useGameStore((s) => s.getBuildingsToUnlockNext);
+  const getNextMilestone = useGameStore((s) => s.getNextMilestone);
 
   const [showUpgradeHints, setShowUpgradeHints] = useState(false);
   const upgradeHints = getUpgradeHints();
   const unlockableBuildings = getUnlockableBuildings();
   const affordableHints = upgradeHints.filter((h) => h.canAfford);
+  const currentMilestone = getCurrentMilestone();
+  const nextBuildings = getBuildingsToUnlockNext();
+  const nextMilestone = getNextMilestone();
 
   const handleBuild = (type: BuildingType) => {
     const game = gameRef.current as { scene?: { getScene: (name: string) => { events: { emit: (event: string, data: unknown) => void } } } };
     const scene = game.scene?.getScene('VillageScene');
     if (scene) {
+      if (getBuildingHasRedDot(type) && currentMilestone) {
+        dismissRedDot(currentMilestone.id, 'building', type);
+      }
       selectBuilding(null);
       scene.events.emit('startPlacing', type);
     }
@@ -113,6 +124,7 @@ export function BuildingPanel({ gameRef }: Props) {
               const config = BUILDINGS[type];
               const cost = getBuildingCost(type, 0);
               const affordable = canAfford(cost);
+              const hasRedDot = getBuildingHasRedDot(type);
               return (
                 <div
                   key={type}
@@ -120,7 +132,10 @@ export function BuildingPanel({ gameRef }: Props) {
                   onClick={() => affordable && handleBuild(type)}
                 >
                   <span className="unlockable-icon">{config.icon}</span>
-                  <span className="unlockable-name">{config.name}</span>
+                  <span className="unlockable-name">
+                    {config.name}
+                    {hasRedDot && <span className="red-dot">●</span>}
+                  </span>
                   <span className="unlockable-tag">NEW</span>
                 </div>
               );
@@ -224,6 +239,7 @@ export function BuildingPanel({ gameRef }: Props) {
               const affordable = canAfford(cost);
               const { met, missing } = checkBuildingRequirements(type);
               const canBuildNow = met && affordable && buildQueue.length < maxBuildQueueSize;
+              const hasRedDot = getBuildingHasRedDot(type);
 
               return (
                 <div
@@ -233,7 +249,10 @@ export function BuildingPanel({ gameRef }: Props) {
                   title={!met ? missing.map(getRequirementDescription).join('\n') : ''}
                 >
                   <div className="building-icon">{config.icon}</div>
-                  <div className="building-name">{config.name}</div>
+                  <div className="building-name">
+                    {config.name}
+                    {hasRedDot && <span className="red-dot">●</span>}
+                  </div>
                   <div className="building-cost">
                     {Object.entries(cost).map(([res, amount]) => (
                       <span key={res} className="cost-mini">
@@ -254,6 +273,25 @@ export function BuildingPanel({ gameRef }: Props) {
               );
             })}
           </div>
+
+          {nextBuildings.length > 0 && nextMilestone && (
+            <div className="milestone-preview-box">
+              <div className="milestone-preview-header">
+                <span>🔓 下一里程碑解锁 ({nextMilestone.icon} Lv.{nextMilestone.townhallLevel})</span>
+              </div>
+              <div className="milestone-preview-items">
+                {nextBuildings.map((b) => {
+                  const config = BUILDINGS[b];
+                  return (
+                    <div key={b} className="milestone-preview-item locked">
+                      <span className="milestone-preview-icon">{config.icon}</span>
+                      <span className="milestone-preview-name">{config.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <UnlockProgress />
         </>

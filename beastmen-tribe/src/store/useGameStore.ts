@@ -308,8 +308,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (!state.spendResources(config.cost)) return false;
 
-    const effectiveTrainTime = config.trainTime / state.recruitEfficiency;
-
     const existingQueue = state.trainingQueue.find((q) => q.type === type);
     if (existingQueue) {
       set({
@@ -324,7 +322,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           {
             type,
             progress: 0,
-            total: effectiveTrainTime,
+            total: config.trainTime,
             count: 1,
           },
         ],
@@ -339,10 +337,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const completed: Warrior[] = [];
     const newQueue: TrainingQueue[] = [];
+    const efficiency = state.recruitEfficiency;
+    const scaledDelta = delta * efficiency;
 
     for (const queue of state.trainingQueue) {
-      const adjustedDelta = delta * state.recruitEfficiency;
-      let newProgress = queue.progress + adjustedDelta;
+      let newProgress = queue.progress + scaledDelta;
       let newCount = queue.count;
 
       while (newProgress >= queue.total && newCount > 0) {

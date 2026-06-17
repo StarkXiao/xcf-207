@@ -9,9 +9,10 @@ import { SavePanel } from './components/SavePanel';
 import { PopulationPanel } from './components/PopulationPanel';
 import { ExpeditionPanel } from './components/ExpeditionPanel';
 import { TechTreePanel } from './components/TechTreePanel';
+import { TaskPanel } from './components/TaskPanel';
 import './App.css';
 
-type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'trade' | 'save';
+type TabType = 'population' | 'building' | 'warrior' | 'tech' | 'battle' | 'expedition' | 'task' | 'trade' | 'save';
 
 const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'population', label: '人口', icon: '👥' },
@@ -20,6 +21,7 @@ const TABS: { id: TabType; label: string; icon: string }[] = [
   { id: 'tech', label: '科技', icon: '🔬' },
   { id: 'battle', label: '战斗', icon: '🛡️' },
   { id: 'expedition', label: '远征', icon: '🗡️' },
+  { id: 'task', label: '委托', icon: '📜' },
   { id: 'trade', label: '交易', icon: '🏪' },
   { id: 'save', label: '设置', icon: '💾' },
 ];
@@ -71,6 +73,7 @@ function App() {
             {activeTab === 'tech' && <TechTreePanel />}
             {activeTab === 'battle' && <BattlePanel />}
             {activeTab === 'expedition' && <ExpeditionPanel />}
+            {activeTab === 'task' && <TaskPanel />}
             {activeTab === 'trade' && <TradePanel />}
             {activeTab === 'save' && <SavePanel />}
           </div>

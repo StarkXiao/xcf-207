@@ -18,6 +18,9 @@ import type {
   MapEventChoice,
   Tech,
   TechEffectType,
+  ActiveTask,
+  TaskChain,
+  TaskGoalType,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -31,6 +34,7 @@ import {
   getExpeditionMap,
 } from '../data/expedition';
 import { TECHNOLOGIES } from '../data/technologies';
+import { TASK_CONFIGS, TASK_REFRESH_INTERVAL, MAX_ACTIVE_CHAINS, selectRandomChains } from '../data/tasks';
 
 const SAVE_KEY = 'beastmen_tribe_save';
 
@@ -99,6 +103,42 @@ const LOYALTY_DECAY_NO_FOOD = 0.5;
 const LOYALTY_RECOVERY_WELL_FED = 0.1;
 const EVENT_INTERVAL_MIN = 60;
 const EVENT_INTERVAL_MAX = 120;
+
+const createActiveTask = (configId: string, currentDay: number): ActiveTask => {
+  const config = TASK_CONFIGS.find((c) => c.id === configId);
+  if (!config) throw new Error(`Task config not found: ${configId}`);
+  return {
+    id: generateId(),
+    configId: config.id,
+    name: config.name,
+    icon: config.icon,
+    description: config.description,
+    goal: { ...config.goal },
+    progress: 0,
+    currentStage: 0,
+    stages: config.stages.map((s) => ({ ...s })),
+    status: 'active',
+    startedAtDay: currentDay,
+    duration: config.duration,
+    failurePenalty: { ...config.failurePenalty },
+    penaltyLoyalty: config.penaltyLoyalty,
+    claimedStages: [],
+  };
+};
+
+const createTaskChains = (currentDay: number): TaskChain[] => {
+  const selected = selectRandomChains(MAX_ACTIVE_CHAINS);
+  return selected.map((chainConfig) => ({
+    id: generateId(),
+    name: chainConfig.name,
+    icon: chainConfig.icon,
+    tasks: chainConfig.taskIds.map((taskId) => createActiveTask(taskId, currentDay)),
+    currentTaskIndex: 0,
+    chainReward: { ...chainConfig.chainReward },
+    chainBonusLoyalty: chainConfig.chainBonusLoyalty,
+    completed: false,
+  }));
+};
 
 const calculateMaxPopulation = (buildings: Building[], technologies: Tech[] = []): number => {
   let cap = BASE_POP_CAPACITY;
@@ -176,6 +216,11 @@ const createInitialState = (): GameState => ({
   technologies: [],
   activeResearch: null,
   unlockedTechnologies: [],
+  taskChains: createTaskChains(1),
+  lastTaskRefreshDay: 1,
+  taskRefreshInterval: TASK_REFRESH_INTERVAL,
+  totalChainsCompleted: 0,
+  totalChainsFailed: 0,
 });
 
 const loadSave = (): GameState => {
@@ -205,6 +250,11 @@ const loadSave = (): GameState => {
       state.technologies = parsed.technologies || [];
       state.activeResearch = parsed.activeResearch || null;
       state.unlockedTechnologies = parsed.unlockedTechnologies || [];
+      state.taskChains = parsed.taskChains || createTaskChains(1);
+      state.lastTaskRefreshDay = parsed.lastTaskRefreshDay ?? 1;
+      state.taskRefreshInterval = parsed.taskRefreshInterval ?? TASK_REFRESH_INTERVAL;
+      state.totalChainsCompleted = parsed.totalChainsCompleted || 0;
+      state.totalChainsFailed = parsed.totalChainsFailed || 0;
       return state;
     }
   } catch (e) {
@@ -249,6 +299,12 @@ interface GameStore extends GameState {
   processResearch: (delta: number) => void;
   canResearch: (techId: string) => boolean;
   getTechBonus: (effectType: TechEffectType, target?: string) => number;
+
+  refreshTaskChains: () => void;
+  processTaskTick: (delta: number) => void;
+  claimTaskStageReward: (chainId: string, taskId: string, stageIndex: number) => boolean;
+  updateTaskProgress: (goalType: TaskGoalType, amount: number, target?: string) => void;
+  claimChainReward: (chainId: string) => boolean;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -322,6 +378,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       unlockedBuildings: newUnlocked,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
     });
+
+    state.updateTaskProgress('build_buildings', 1, type);
+
     return true;
   },
 
@@ -364,6 +423,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       unlockedBuildings: newUnlockedBuildings,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
     });
+
+    state.updateTaskProgress('upgrade_buildings', 1);
+
     return true;
   },
 
@@ -479,6 +541,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         warriors: [...state.warriors, ...completed],
         trainingQueue: newQueue,
       });
+      for (const w of completed) {
+        state.updateTaskProgress('train_warriors', 1, w.type);
+      }
     } else {
       set({ trainingQueue: newQueue });
     }
@@ -604,6 +669,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
     });
 
+    if (victory) {
+      state.updateTaskProgress('win_battles', 1);
+    }
+
     return { result: victory ? 'victory' : 'defeat', log };
   },
 
@@ -621,6 +690,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         t.id === tradeId ? { ...t, stock: t.stock - 1 } : t
       ),
     });
+
+    state.updateTaskProgress('trade_count', 1);
+
     return true;
   },
 
@@ -723,6 +795,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       population: newPopulation,
       recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
     });
+
+    if (newPopulation > state.population) {
+      state.updateTaskProgress('reach_population', newPopulation);
+    }
+    if (newLoyalty > state.loyalty) {
+      state.updateTaskProgress('reach_loyalty', newLoyalty);
+    }
   },
 
   processEventTick: (delta) => {
@@ -1199,6 +1278,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       loyalty: Math.min(100, state.loyalty + (isVictory ? 3 : -5)),
       expeditionNotifications: [...state.expeditionNotifications, notification],
     });
+
+    if (isVictory) {
+      state.updateTaskProgress('expedition_complete', 1);
+    }
   },
 
   cancelExpedition: () => {
@@ -1339,6 +1422,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         unlockedBuildings: newUnlockedBuildings,
         maxPopulation: newMaxPop,
       });
+
+      state.updateTaskProgress('research_complete', 1);
     } else {
       const updatedTech: Tech = {
         ...state.activeResearch,
@@ -1361,15 +1446,242 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return calculateTechBonus(state.technologies, effectType, target);
   },
 
+  refreshTaskChains: () => {
+    const state = get();
+    const currentDay = Math.floor(state.day);
+
+    for (const chain of state.taskChains) {
+      if (chain.completed) continue;
+      for (const task of chain.tasks) {
+        if (task.status !== 'active') continue;
+        const elapsed = currentDay - Math.floor(task.startedAtDay);
+        if (elapsed >= task.duration) {
+          const lastStage = task.stages[task.stages.length - 1];
+          const completed = task.progress >= lastStage.requiredProgress;
+          if (!completed) {
+            task.status = 'failed';
+            const penalty: Partial<Resources> = {};
+            for (const [key, amount] of Object.entries(task.failurePenalty)) {
+              penalty[key as keyof Resources] = amount as number;
+            }
+            state.addResources(penalty);
+            let newLoyalty = state.loyalty;
+            if (task.penaltyLoyalty) {
+              newLoyalty = Math.max(0, newLoyalty + task.penaltyLoyalty);
+            }
+            set({ loyalty: newLoyalty, recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents) });
+          }
+        }
+      }
+    }
+
+    const allChainsDone = state.taskChains.every(
+      (c) => c.completed || c.tasks.every((t) => t.status === 'failed' || t.status === 'completed')
+    );
+
+    if (allChainsDone || currentDay - state.lastTaskRefreshDay >= state.taskRefreshInterval) {
+      const newChains = createTaskChains(currentDay);
+      let completed = state.totalChainsCompleted;
+      let failed = state.totalChainsFailed;
+
+      for (const chain of state.taskChains) {
+        if (chain.completed) {
+          completed++;
+        } else if (chain.tasks.some((t) => t.status === 'failed')) {
+          failed++;
+        }
+      }
+
+      set({
+        taskChains: newChains,
+        lastTaskRefreshDay: currentDay,
+        totalChainsCompleted: completed,
+        totalChainsFailed: failed,
+      });
+    }
+  },
+
+  processTaskTick: (_delta) => {
+    const state = get();
+    const currentDay = Math.floor(state.day);
+
+    let needsRefresh = false;
+    const updatedChains = state.taskChains.map((chain) => {
+      if (chain.completed) return chain;
+
+      let chainModified = false;
+      const updatedTasks = chain.tasks.map((task) => {
+        if (task.status !== 'active') return task;
+
+        const elapsed = currentDay - Math.floor(task.startedAtDay);
+        if (elapsed >= task.duration) {
+          const lastStage = task.stages[task.stages.length - 1];
+          const completed = task.progress >= lastStage.requiredProgress;
+          if (completed) {
+            chainModified = true;
+            return { ...task, status: 'completed' as const };
+          } else {
+            chainModified = true;
+            return { ...task, status: 'failed' as const };
+          }
+        }
+        return task;
+      });
+
+      if (!chainModified) return chain;
+
+      const allCurrentDone = updatedTasks
+        .filter((_, i) => i <= chain.currentTaskIndex)
+        .every((t) => t.status === 'completed' || t.status === 'failed');
+
+      let newCurrentIndex = chain.currentTaskIndex;
+      if (allCurrentDone && chain.currentTaskIndex < updatedTasks.length - 1) {
+        const nextTask = updatedTasks[chain.currentTaskIndex];
+        if (nextTask.status === 'completed') {
+          newCurrentIndex = chain.currentTaskIndex + 1;
+        }
+      }
+
+      const chainComplete = updatedTasks.every(
+        (t) => t.status === 'completed'
+      );
+      const chainFailed = updatedTasks.some(
+        (t, i) => i <= newCurrentIndex && t.status === 'failed'
+      );
+
+      if (chainComplete || chainFailed) {
+        needsRefresh = true;
+      }
+
+      return {
+        ...chain,
+        tasks: updatedTasks,
+        currentTaskIndex: newCurrentIndex,
+        completed: chainComplete,
+      };
+    });
+
+    set({ taskChains: updatedChains });
+
+    if (needsRefresh) {
+      const currentDay = Math.floor(state.day);
+      if (currentDay - state.lastTaskRefreshDay >= state.taskRefreshInterval) {
+        state.refreshTaskChains();
+      }
+    }
+  },
+
+  claimTaskStageReward: (chainId, taskId, stageIndex) => {
+    const state = get();
+    const chain = state.taskChains.find((c) => c.id === chainId);
+    if (!chain) return false;
+
+    const task = chain.tasks.find((t) => t.id === taskId);
+    if (!task || task.status !== 'active') return false;
+
+    const stage = task.stages.find((s) => s.index === stageIndex);
+    if (!stage) return false;
+
+    if (task.progress < stage.requiredProgress) return false;
+    if (task.claimedStages.includes(stageIndex)) return false;
+
+    state.addResources(stage.reward);
+    let newLoyalty = state.loyalty;
+    if (stage.bonusLoyalty) {
+      newLoyalty = Math.min(100, newLoyalty + stage.bonusLoyalty);
+    }
+
+    const updatedChains = state.taskChains.map((c) => {
+      if (c.id !== chainId) return c;
+      return {
+        ...c,
+        tasks: c.tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          return {
+            ...t,
+            claimedStages: [...t.claimedStages, stageIndex],
+          };
+        }),
+      };
+    });
+
+    set({
+      taskChains: updatedChains,
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+    });
+
+    return true;
+  },
+
+  updateTaskProgress: (goalType, amount, target) => {
+    const state = get();
+    let modified = false;
+
+    const isThresholdGoal = goalType === 'reach_population' || goalType === 'reach_loyalty';
+
+    const updatedChains = state.taskChains.map((chain) => {
+      if (chain.completed) return chain;
+
+      const updatedTasks = chain.tasks.map((task) => {
+        if (task.status !== 'active') return task;
+        if (chain.tasks.indexOf(task) !== chain.currentTaskIndex) return task;
+
+        const goal = task.goal;
+        if (goal.type !== goalType) return task;
+        if (goal.target && goal.target !== target) return task;
+
+        modified = true;
+        const newProgress = isThresholdGoal ? Math.max(task.progress, amount) : task.progress + amount;
+        return { ...task, progress: newProgress };
+      });
+
+      return { ...chain, tasks: updatedTasks };
+    });
+
+    if (modified) {
+      set({ taskChains: updatedChains });
+    }
+  },
+
+  claimChainReward: (chainId) => {
+    const state = get();
+    const chain = state.taskChains.find((c) => c.id === chainId);
+    if (!chain || !chain.completed) return false;
+
+    const allClaimed = chain.tasks.every((t) =>
+      t.stages.every((s) => t.claimedStages.includes(s.index))
+    );
+    if (!allClaimed) return false;
+
+    state.addResources(chain.chainReward);
+    const newLoyalty = Math.min(100, state.loyalty + chain.chainBonusLoyalty);
+
+    set({
+      loyalty: newLoyalty,
+      recruitEfficiency: calculateRecruitEfficiency(newLoyalty, state.activeEvents),
+      totalChainsCompleted: state.totalChainsCompleted + 1,
+    });
+
+    return true;
+  },
+
   tick: (delta) => {
     const state = get();
 
-    state.collectResources();
+    const collected = state.collectResources();
+    for (const [key, amount] of Object.entries(collected)) {
+      if ((amount as number) > 0) {
+        state.updateTaskProgress('collect_resource', Math.floor(amount as number), key);
+      }
+    }
+
     state.processTraining(delta);
     state.processPopulationTick(delta);
     state.processEventTick(delta);
     state.processExpeditionTick(delta);
     state.processResearch(delta);
+    state.processTaskTick(delta);
 
     const newBuildings = state.buildings.map((b) => {
       if (b.isBuilding && b.buildProgress < 100) {

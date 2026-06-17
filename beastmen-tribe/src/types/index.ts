@@ -304,6 +304,74 @@ export interface Tech {
   startedAt: number;
 }
 
+export type TaskGoalType =
+  | 'collect_resource'
+  | 'train_warriors'
+  | 'win_battles'
+  | 'build_buildings'
+  | 'upgrade_buildings'
+  | 'expedition_complete'
+  | 'trade_count'
+  | 'research_complete'
+  | 'reach_population'
+  | 'reach_loyalty';
+
+export interface TaskGoal {
+  type: TaskGoalType;
+  target?: string;
+  amount: number;
+}
+
+export interface TaskStage {
+  index: number;
+  requiredProgress: number;
+  reward: Partial<Resources>;
+  bonusLoyalty?: number;
+}
+
+export interface TaskConfig {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  goal: TaskGoal;
+  stages: TaskStage[];
+  failurePenalty: Partial<Resources>;
+  penaltyLoyalty?: number;
+  duration: number;
+}
+
+export type TaskStatus = 'active' | 'completed' | 'failed';
+
+export interface ActiveTask {
+  id: string;
+  configId: string;
+  name: string;
+  icon: string;
+  description: string;
+  goal: TaskGoal;
+  progress: number;
+  currentStage: number;
+  stages: TaskStage[];
+  status: TaskStatus;
+  startedAtDay: number;
+  duration: number;
+  failurePenalty: Partial<Resources>;
+  penaltyLoyalty?: number;
+  claimedStages: number[];
+}
+
+export interface TaskChain {
+  id: string;
+  name: string;
+  icon: string;
+  tasks: ActiveTask[];
+  currentTaskIndex: number;
+  chainReward: Partial<Resources>;
+  chainBonusLoyalty: number;
+  completed: boolean;
+}
+
 export interface GameState {
   tribeName: string;
   day: number;
@@ -333,4 +401,9 @@ export interface GameState {
   technologies: Tech[];
   activeResearch: Tech | null;
   unlockedTechnologies: string[];
+  taskChains: TaskChain[];
+  lastTaskRefreshDay: number;
+  taskRefreshInterval: number;
+  totalChainsCompleted: number;
+  totalChainsFailed: number;
 }

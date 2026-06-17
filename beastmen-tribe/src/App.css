@@ -2322,3 +2322,474 @@ body {
   color: #8a7060;
   cursor: not-allowed;
 }
+
+.task-panel {
+  position: relative;
+}
+
+.task-overview {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.task-stats-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.task-stat-item {
+  flex: 1;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 8px 4px;
+}
+
+.task-stat-label {
+  display: block;
+  font-size: 10px;
+  color: #a08060;
+  margin-bottom: 4px;
+}
+
+.task-stat-value {
+  display: block;
+  font-size: 16px;
+  font-weight: bold;
+  color: #f5e6d3;
+}
+
+.task-stat-green {
+  color: #81c784;
+}
+
+.task-stat-red {
+  color: #e57373;
+}
+
+.task-refresh-bar {
+  margin-bottom: 10px;
+}
+
+.task-refresh-label {
+  font-size: 11px;
+  color: #b0a090;
+  margin-bottom: 6px;
+}
+
+.task-refresh-fill {
+  background: linear-gradient(90deg, #9c27b0, #ce93d8) !important;
+}
+
+.task-refresh-btn {
+  width: 100%;
+}
+
+.task-chain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-chain-card {
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid #5d4037;
+  border-radius: 12px;
+  padding: 14px;
+  transition: all 0.2s;
+}
+
+.task-chain-card.chain-completed {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.task-chain-card.chain-failed {
+  border-color: #e53935;
+  background: rgba(229, 57, 53, 0.05);
+}
+
+.chain-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.chain-icon {
+  font-size: 28px;
+  flex-shrink: 0;
+}
+
+.chain-info {
+  flex: 1;
+}
+
+.chain-name {
+  font-size: 15px;
+  font-weight: bold;
+  color: #ffd700;
+  margin-bottom: 2px;
+}
+
+.chain-progress-text {
+  font-size: 11px;
+  color: #b0a090;
+}
+
+.chain-claim-btn {
+  flex-shrink: 0;
+  width: auto;
+  animation: pulse-reward 1.5s infinite;
+}
+
+@keyframes pulse-reward {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(76, 175, 80, 0); }
+}
+
+.chain-badge {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.chain-badge-complete {
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+}
+
+.chain-badge-fail {
+  background: rgba(229, 57, 53, 0.2);
+  color: #e57373;
+}
+
+.chain-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 8px;
+}
+
+.chain-task-wrapper {
+  position: relative;
+  padding-left: 20px;
+}
+
+.chain-connector {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgba(139, 90, 43, 0.3);
+}
+
+.chain-connector.connector-first {
+  top: 20px;
+}
+
+.chain-connector.connector-active {
+  background: rgba(139, 90, 43, 0.6);
+}
+
+.chain-task-wrapper::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 18px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #5d4037;
+  border: 2px solid #8b5a2b;
+  z-index: 1;
+}
+
+.chain-task-wrapper .task-card.task-current::before {
+  display: none;
+}
+
+.chain-task-wrapper .task-card.task-done::before {
+  display: none;
+}
+
+.chain-task-wrapper .task-card.task-locked::before {
+  display: none;
+}
+
+.chain-task-wrapper .task-card.task-failed::before {
+  display: none;
+}
+
+.chain-task-wrapper:last-child .chain-connector {
+  display: none;
+}
+
+.task-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid #5d4037;
+  border-radius: 10px;
+  padding: 12px;
+  margin: 4px 0;
+  transition: all 0.2s;
+}
+
+.task-card.task-current {
+  border-color: #ffd700;
+  background: rgba(255, 215, 0, 0.08);
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.15);
+}
+
+.task-card.task-locked {
+  opacity: 0.4;
+}
+
+.task-card.task-done {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.05);
+}
+
+.task-card.task-failed {
+  border-color: #e53935;
+  background: rgba(229, 57, 53, 0.05);
+  opacity: 0.7;
+}
+
+.task-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.task-info {
+  flex: 1;
+}
+
+.task-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: #f5e6d3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-status-badge {
+  font-size: 12px;
+}
+
+.badge-done {
+  color: #81c784;
+}
+
+.badge-fail {
+  color: #e57373;
+}
+
+.task-desc {
+  font-size: 11px;
+  color: #a08060;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.task-progress-section {
+  margin-bottom: 10px;
+}
+
+.task-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #b0a090;
+  margin-bottom: 4px;
+}
+
+.task-time-left {
+  color: #ff9800;
+  font-weight: 600;
+}
+
+.task-progress-bar {
+  height: 8px;
+}
+
+.task-progress-fill {
+  background: linear-gradient(90deg, #ffd700, #ff9800) !important;
+}
+
+.task-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.task-stages-done {
+  margin-bottom: 4px;
+}
+
+.task-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.task-stage.stage-reached {
+  border-color: #ffd700;
+  background: rgba(255, 215, 0, 0.08);
+}
+
+.task-stage.stage-claimed {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.08);
+  opacity: 0.7;
+}
+
+.task-stage.stage-unclaimed {
+  border-color: #ff9800;
+  background: rgba(255, 152, 0, 0.08);
+}
+
+.stage-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 50px;
+}
+
+.stage-marker {
+  font-size: 14px;
+}
+
+.stage-requirement {
+  font-size: 11px;
+  color: #f5e6d3;
+  font-weight: 600;
+}
+
+.stage-rewards {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.stage-reward-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+  font-weight: 600;
+}
+
+.loyalty-tag {
+  background: rgba(244, 67, 54, 0.15);
+  color: #ef9a9a;
+}
+
+.stage-claim-btn {
+  width: auto;
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 11px;
+}
+
+.task-penalty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: rgba(229, 57, 53, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(229, 57, 53, 0.3);
+}
+
+.penalty-label {
+  font-size: 11px;
+  color: #e57373;
+  font-weight: 600;
+}
+
+.penalty-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(229, 57, 53, 0.15);
+  color: #ef9a9a;
+  font-weight: 600;
+}
+
+.loyalty-penalty {
+  background: rgba(244, 67, 54, 0.15);
+  color: #ef9a9a;
+}
+
+.task-failed-info {
+  text-align: center;
+  font-size: 12px;
+  color: #e57373;
+  padding: 8px;
+  background: rgba(229, 57, 53, 0.08);
+  border-radius: 6px;
+}
+
+.chain-reward-preview {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 215, 0, 0.08);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 8px;
+}
+
+.chain-reward-label {
+  font-size: 11px;
+  color: #ffd700;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.chain-reward-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chain-reward-item {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(255, 215, 0, 0.15);
+  color: #ffd700;
+  font-weight: 600;
+}
+
+.chain-reward-loyalty {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(244, 67, 54, 0.12);
+  color: #ef9a9a;
+  font-weight: 600;
+}

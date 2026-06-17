@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { RESOURCE_INFO } from '../data/trades';
 import { getBuildingStorageCapacity } from '../data/buildings';
-import type { ResourceType } from '../types';
+import type { ResourceType, BuildingStorageInfo } from '../types';
 
 interface Props {
   onClose: () => void;
 }
+
+const MAX_TRANSPORT_TASKS = 5;
 
 export function StoragePanel({ onClose }: Props) {
   const resources = useGameStore((s) => s.resources);
@@ -19,13 +21,44 @@ export function StoragePanel({ onClose }: Props) {
   const cancelTransport = useGameStore((s) => s.cancelTransport);
   const dismissSpoilageEvent = useGameStore((s) => s.dismissSpoilageEvent);
   const startTransport = useGameStore((s) => s.startTransport);
+  const getAllBuildingStorageInfo = useGameStore((s) => s.getAllBuildingStorageInfo);
+  const getBuildingStorageUsagePercent = useGameStore((s) => s.getBuildingStorageUsagePercent);
 
   const [selectedResource, setSelectedResource] = useState<ResourceType>('food');
   const [transportAmount, setTransportAmount] = useState(50);
+  const [fromBuildingId, setFromBuildingId] = useState<string>('');
+  const [toBuildingId, setToBuildingId] = useState<string>('');
 
   const hasCaravanserai = buildings.some((b) => b.type === 'caravanserai' && !b.isBuilding);
   const warehouses = buildings.filter((b) => b.type === 'warehouse' && !b.isBuilding);
-  const activeBuildings = buildings.filter((b) => !b.isBuilding && b.type !== 'townhall');
+  const allStorageInfo: BuildingStorageInfo[] = getAllBuildingStorageInfo();
+  const eligibleBuildings = allStorageInfo.filter((info) =>
+    Object.keys(info.capacity).length > 0
+  );
+
+  useEffect(() => {
+    if (fromBuildingId === '' && eligibleBuildings.length > 0) {
+      setFromBuildingId(eligibleBuildings[0].buildingId);
+    }
+  }, [eligibleBuildings, fromBuildingId]);
+
+  useEffect(() => {
+    if (toBuildingId === '' && eligibleBuildings.length > 1) {
+      const last = eligibleBuildings[eligibleBuildings.length - 1];
+      if (last.buildingId !== fromBuildingId) {
+        setToBuildingId(last.buildingId);
+      } else if (eligibleBuildings.length > 1) {
+        setToBuildingId(eligibleBuildings[0].buildingId);
+      }
+    }
+  }, [eligibleBuildings, toBuildingId, fromBuildingId]);
+
+  const fromBuilding = eligibleBuildings.find((b) => b.buildingId === fromBuildingId);
+  const toBuilding = eligibleBuildings.find((b) => b.buildingId === toBuildingId);
+  const fromAvailable = fromBuilding ? (fromBuilding.storage[selectedResource] || 0) : 0;
+  const toCapacity = toBuilding ? (toBuilding.capacity[selectedResource] || 0) : 0;
+  const toStored = toBuilding ? (toBuilding.storage[selectedResource] || 0) : 0;
+  const toCanAccept = toCapacity - toStored;
 
   const getStorageColor = (percent: number) => {
     if (percent >= 90) return '#e53935';
@@ -40,10 +73,9 @@ export function StoragePanel({ onClose }: Props) {
   };
 
   const handleStartTransport = () => {
-    if (activeBuildings.length < 2) return;
-    const fromBuilding = activeBuildings[0];
-    const toBuilding = activeBuildings[activeBuildings.length - 1];
-    startTransport(selectedResource, transportAmount, fromBuilding.id, toBuilding.id);
+    if (!fromBuildingId || !toBuildingId) return;
+    if (fromBuildingId === toBuildingId) return;
+    startTransport(selectedResource, transportAmount, fromBuildingId, toBuildingId);
   };
 
   const totalStorageFromWarehouses = warehouses.reduce((sum, w) => {
@@ -56,6 +88,17 @@ export function StoragePanel({ onClose }: Props) {
       iron: sum.iron + (cap.iron || 0),
     };
   }, { food: 0, wood: 0, stone: 0, gold: 0, iron: 0 });
+
+  const getBuildingDisplayName = (info: BuildingStorageInfo) => {
+    const count = buildings.filter((b) => b.type === info.buildingType).length;
+    const idx = buildings
+      .filter((b) => b.type === info.buildingType)
+      .findIndex((b) => b.id === info.buildingId) + 1;
+    if (count > 1) {
+      return `${info.buildingName} #${idx}`;
+    }
+    return info.buildingName;
+  };
 
   return (
     <div className="panel storage-panel">
@@ -88,7 +131,7 @@ export function StoragePanel({ onClose }: Props) {
       )}
 
       <div className="section">
-        <h4 className="section-title">📊 资源容量</h4>
+        <h4 className="section-title">📊 资源总览</h4>
         <div className="capacity-list">
           {(Object.keys(RESOURCE_INFO) as ResourceType[]).map((resource) => {
             const current = resources[resource];
@@ -120,6 +163,54 @@ export function StoragePanel({ onClose }: Props) {
             );
           })}
         </div>
+      </div>
+
+      <div className="section">
+        <h4 className="section-title">
+          🏛️ 各建筑仓储 ({eligibleBuildings.length})
+        </h4>
+        {eligibleBuildings.length === 0 ? (
+          <div className="empty-state">暂无仓储建筑</div>
+        ) : (
+          <div className="building-storage-list">
+            {eligibleBuildings.map((info) => (
+              <div key={info.buildingId} className="building-storage-item">
+                <div className="building-storage-header">
+                  <span className="building-storage-name">
+                    {BUILDING_ICONS[info.buildingType] || '🏠'} {getBuildingDisplayName(info)}
+                  </span>
+                </div>
+                <div className="building-storage-resources">
+                  {(Object.keys(RESOURCE_INFO) as ResourceType[]).map((res) => {
+                    const cap = info.capacity[res] || 0;
+                    if (cap <= 0) return null;
+                    const stored = info.storage[res] || 0;
+                    const percent = getBuildingStorageUsagePercent(info.buildingId, res);
+                    return (
+                      <div key={res} className="mini-capacity-item">
+                        <span className="mini-capacity-icon">
+                          {RESOURCE_INFO[res].icon}
+                        </span>
+                        <span className="mini-capacity-value">
+                          {Math.floor(stored)}/{cap}
+                        </span>
+                        <div className="mini-capacity-bar">
+                          <div
+                            className="mini-capacity-fill"
+                            style={{
+                              width: `${percent}%`,
+                              backgroundColor: getStorageColor(percent),
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="section">
@@ -183,23 +274,74 @@ export function StoragePanel({ onClose }: Props) {
                 </select>
               </div>
               <div className="form-row">
+                <label>来源建筑：</label>
+                <select
+                  value={fromBuildingId}
+                  onChange={(e) => setFromBuildingId(e.target.value)}
+                >
+                  {eligibleBuildings.map((info) => (
+                    <option key={info.buildingId} value={info.buildingId}>
+                      {getBuildingDisplayName(info)}
+                      ({RESOURCE_INFO[selectedResource].icon}
+                      {Math.floor(info.storage[selectedResource] || 0)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-row">
+                <label>目标建筑：</label>
+                <select
+                  value={toBuildingId}
+                  onChange={(e) => setToBuildingId(e.target.value)}
+                >
+                  {eligibleBuildings
+                    .filter((info) => info.buildingId !== fromBuildingId)
+                    .map((info) => {
+                      const cap = info.capacity[selectedResource] || 0;
+                      const stored = info.storage[selectedResource] || 0;
+                      const available = cap - stored;
+                      return (
+                        <option key={info.buildingId} value={info.buildingId}>
+                          {getBuildingDisplayName(info)}
+                          (可存: {Math.floor(available)})
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+              <div className="form-row">
                 <label>数量：</label>
                 <input
                   type="number"
                   value={transportAmount}
                   onChange={(e) => setTransportAmount(Math.max(1, parseInt(e.target.value) || 0))}
                   min={1}
-                  max={resources[selectedResource]}
+                  max={Math.floor(Math.min(fromAvailable, toCanAccept))}
                 />
+              </div>
+              <div className="transport-hint">
+                {fromBuilding && (
+                  <span>
+                    来源可用：{RESOURCE_INFO[selectedResource].icon}{Math.floor(fromAvailable)}
+                  </span>
+                )}
+                {toBuilding && (
+                  <span>
+                    目标可存：{RESOURCE_INFO[selectedResource].icon}{Math.floor(toCanAccept)}
+                  </span>
+                )}
               </div>
               <button
                 className="btn btn-primary"
                 onClick={handleStartTransport}
                 disabled={
-                  transportTasks.length >= 5 ||
+                  transportTasks.length >= MAX_TRANSPORT_TASKS ||
                   transportAmount <= 0 ||
-                  resources[selectedResource] < transportAmount ||
-                  activeBuildings.length < 2
+                  fromAvailable < transportAmount ||
+                  toCanAccept < transportAmount ||
+                  !fromBuildingId ||
+                  !toBuildingId ||
+                  fromBuildingId === toBuildingId
                 }
               >
                 开始运输
@@ -212,13 +354,17 @@ export function StoragePanel({ onClose }: Props) {
               <div className="transport-list">
                 {transportTasks.map((task) => {
                   const progress = (task.progress / task.totalTime) * 100;
+                  const fromInfo = eligibleBuildings.find((b) => b.buildingId === task.fromBuildingId);
+                  const toInfo = eligibleBuildings.find((b) => b.buildingId === task.toBuildingId);
                   return (
                     <div key={task.id} className="transport-item">
                       <div className="transport-header">
                         <span className="transport-resource">
                           {RESOURCE_INFO[task.resource].icon} {task.amount}
                         </span>
-                        <span className="transport-status">运输中</span>
+                        <span className="transport-status">
+                          {fromInfo?.buildingName} → {toInfo?.buildingName}
+                        </span>
                       </div>
                       <div className="transport-bar">
                         <div
@@ -276,4 +422,16 @@ export function StoragePanel({ onClose }: Props) {
   );
 }
 
-const MAX_TRANSPORT_TASKS = 5;
+const BUILDING_ICONS: Record<string, string> = {
+  townhall: '🏛️',
+  lumbermill: '🪓',
+  quarry: '⛏️',
+  farm: '🌾',
+  barracks: '⚔️',
+  market: '💰',
+  smithy: '🔨',
+  wall: '🧱',
+  hut: '🛖',
+  warehouse: '🏚️',
+  caravanserai: '🐪',
+};

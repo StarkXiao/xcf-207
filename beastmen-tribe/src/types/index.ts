@@ -89,6 +89,15 @@ export interface Building {
   isBuilding: boolean;
   buildProgress: number;
   lastCollect: number;
+  storage: Partial<Resources>;
+}
+
+export interface BuildingStorageInfo {
+  buildingId: string;
+  buildingType: BuildingType;
+  buildingName: string;
+  storage: Partial<Resources>;
+  capacity: Partial<Resources>;
 }
 
 export type WarriorType = 'grunt' | 'archer' | 'shaman' | 'berserker' | 'warlord';

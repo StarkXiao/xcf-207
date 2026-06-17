@@ -31,6 +31,7 @@ import type {
   AllyReinforcement,
   EndingType,
   GameEnding,
+  BuildingStorageInfo,
 } from '../types';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity } from '../data/buildings';
 import { WARRIORS } from '../data/warriors';
@@ -153,35 +154,67 @@ const BASE_RESOURCE_CAPACITY: ResourceCapacity = {
   gold: 200,
   iron: 100,
 };
+void BASE_RESOURCE_CAPACITY;
+
+const BUILDING_PRODUCTION_STORAGE_RATIO = 50;
 
 const TRANSPORT_BASE_TIME = 10;
 const MAX_TRANSPORT_TASKS = 5;
 const MAX_OFFLINE_HOURS = 8;
 const OFFLINE_EFFICIENCY = 0.7;
 
+const getBuildingCapacityByType = (type: BuildingType, level: number): Partial<Resources> => {
+  const config = BUILDINGS[type];
+  if (!config) return {};
+
+  if (config.baseStorageCapacity) {
+    return getBuildingStorageCapacity(type, level);
+  }
+
+  const production = getBuildingProduction(type, level);
+  if (Object.keys(production).length > 0) {
+    const capacity: Partial<Resources> = {};
+    for (const [key, rate] of Object.entries(production)) {
+      capacity[key as keyof Resources] = Math.floor((rate as number) * BUILDING_PRODUCTION_STORAGE_RATIO);
+    }
+    return capacity;
+  }
+
+  if (type === 'townhall') {
+    return {
+      food: 200 * level,
+      wood: 200 * level,
+      stone: 150 * level,
+      gold: 100 * level,
+      iron: 50 * level,
+    };
+  }
+
+  return {};
+};
+
 const calculateResourceCapacity = (buildings: Building[], _technologies?: Tech[]): ResourceCapacity => {
-  const capacity: ResourceCapacity = { ...BASE_RESOURCE_CAPACITY };
+  const capacity: ResourceCapacity = { food: 0, wood: 0, stone: 0, gold: 0, iron: 0 };
 
   for (const b of buildings) {
     if (b.isBuilding) continue;
-    const storageCap = getBuildingStorageCapacity(b.type, b.level);
-    for (const [key, amount] of Object.entries(storageCap)) {
-      (capacity as any)[key] += amount as number;
+    const buildingCap = getBuildingCapacityByType(b.type, b.level);
+    for (const [key, amount] of Object.entries(buildingCap)) {
+      capacity[key as keyof ResourceCapacity] += amount as number;
     }
   }
 
-  const townhallBonus = buildings
-    .filter((b) => b.type === 'townhall' && !b.isBuilding)
-    .reduce((sum, b) => sum + b.level * 50, 0);
-  if (townhallBonus > 0) {
-    capacity.food += townhallBonus;
-    capacity.wood += townhallBonus;
-    capacity.stone += townhallBonus;
-    capacity.gold += Math.floor(townhallBonus * 0.5);
-    capacity.iron += Math.floor(townhallBonus * 0.3);
-  }
-
   return capacity;
+};
+
+const calculateTotalResources = (buildings: Building[]): Resources => {
+  const total: Resources = { food: 0, wood: 0, stone: 0, gold: 0, iron: 0 };
+  for (const b of buildings) {
+    for (const [key, amount] of Object.entries(b.storage || {})) {
+      total[key as keyof Resources] += amount as number;
+    }
+  }
+  return total;
 };
 
 const createActiveTask = (configId: string, currentDay: number): ActiveTask => {
@@ -252,18 +285,8 @@ const calculateRecruitEfficiency = (loyalty: number, activeEvents: ActiveTribeEv
   return Math.max(0.2, Math.min(2.0, efficiency));
 };
 
-const createInitialState = (): GameState => ({
-  tribeName: '血牙部落',
-  day: 1,
-  resources: {
-    food: 300,
-    wood: 250,
-    stone: 180,
-    gold: 120,
-    iron: 0,
-  },
-  resourceCapacity: { ...BASE_RESOURCE_CAPACITY },
-  buildings: [
+const createInitialState = (): GameState => {
+  const initialBuildings: Building[] = [
     {
       id: 'townhall-1',
       type: 'townhall',
@@ -273,53 +296,68 @@ const createInitialState = (): GameState => ({
       isBuilding: false,
       buildProgress: 100,
       lastCollect: Date.now(),
+      storage: {
+        food: 300,
+        wood: 250,
+        stone: 180,
+        gold: 120,
+        iron: 0,
+      },
     },
-  ],
-  transportTasks: [],
-  spoilageEvents: [],
-  spoilageCooldown: SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
-  offlineEarnings: null,
-  lastOnlineTime: Date.now(),
-  warriors: [],
-  trainingQueue: [],
-  invasion: null,
-  trades: generateTrades(6),
-  unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall'],
-  unlockedWarriors: ['grunt'],
-  selectedBuildingId: null,
-  lastSave: Date.now(),
-  totalWins: 0,
-  totalLosses: 0,
-  population: 8,
-  maxPopulation: BASE_POP_CAPACITY + 5,
-  loyalty: 70,
-  foodConsumptionRate: FOOD_PER_POP,
-  activeEvents: [],
-  eventCooldown: EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
-  recruitEfficiency: 0.5 + (70 / 100) * 0.5,
-  activeExpedition: null,
-  expeditionNotifications: [],
-  totalExpeditions: 0,
-  expeditionWins: 0,
-  technologies: [],
-  activeResearch: null,
-  unlockedTechnologies: [],
-  taskChains: createTaskChains(1),
-  lastTaskRefreshDay: 1,
-  taskRefreshInterval: TASK_REFRESH_INTERVAL,
-  totalChainsCompleted: 0,
-  totalChainsFailed: 0,
-  season: 'spring',
-  weather: 'sunny',
-  seasonProgress: 0,
-  weatherDuration: getWeatherDuration('sunny'),
-  factions: createInitialFactions(),
-  activeDiplomaticEvents: [],
-  diplomaticEventCooldown: getDiplomaticEventInterval(),
-  allyReinforcements: [],
-  totalTrades: 0,
-  gameEnding: null,
-});
+  ];
+
+  return {
+    tribeName: '血牙部落',
+    day: 1,
+    resources: calculateTotalResources(initialBuildings),
+    resourceCapacity: calculateResourceCapacity(initialBuildings),
+    buildings: initialBuildings,
+    transportTasks: [],
+    spoilageEvents: [],
+    spoilageCooldown: SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
+    offlineEarnings: null,
+    lastOnlineTime: Date.now(),
+    warriors: [],
+    trainingQueue: [],
+    invasion: null,
+    trades: generateTrades(6),
+    unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall'],
+    unlockedWarriors: ['grunt'],
+    selectedBuildingId: null,
+    lastSave: Date.now(),
+    totalWins: 0,
+    totalLosses: 0,
+    population: 8,
+    maxPopulation: BASE_POP_CAPACITY + 5,
+    loyalty: 70,
+    foodConsumptionRate: FOOD_PER_POP,
+    activeEvents: [],
+    eventCooldown: EVENT_INTERVAL_MIN + Math.random() * (EVENT_INTERVAL_MAX - EVENT_INTERVAL_MIN),
+    recruitEfficiency: 0.5 + (70 / 100) * 0.5,
+    activeExpedition: null,
+    expeditionNotifications: [],
+    totalExpeditions: 0,
+    expeditionWins: 0,
+    technologies: [],
+    activeResearch: null,
+    unlockedTechnologies: [],
+    taskChains: createTaskChains(1),
+    lastTaskRefreshDay: 1,
+    taskRefreshInterval: TASK_REFRESH_INTERVAL,
+    totalChainsCompleted: 0,
+    totalChainsFailed: 0,
+    season: 'spring',
+    weather: 'sunny',
+    seasonProgress: 0,
+    weatherDuration: getWeatherDuration('sunny'),
+    factions: createInitialFactions(),
+    activeDiplomaticEvents: [],
+    diplomaticEventCooldown: getDiplomaticEventInterval(),
+    allyReinforcements: [],
+    totalTrades: 0,
+    gameEnding: null,
+  };
+};
 
 const loadSave = (): GameState => {
   try {
@@ -344,7 +382,6 @@ const loadSave = (): GameState => {
         allyReinforcements: parsed.allyReinforcements || [],
         totalTrades: parsed.totalTrades || 0,
         gameEnding: parsed.gameEnding || null,
-        resourceCapacity: parsed.resourceCapacity || { ...BASE_RESOURCE_CAPACITY },
         transportTasks: parsed.transportTasks || [],
         spoilageEvents: parsed.spoilageEvents || [],
         spoilageCooldown: parsed.spoilageCooldown ?? SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN),
@@ -369,7 +406,25 @@ const loadSave = (): GameState => {
       state.weather = parsed.weather || 'sunny';
       state.seasonProgress = parsed.seasonProgress || 0;
       state.weatherDuration = parsed.weatherDuration ?? getWeatherDuration(state.weather);
+
+      const needsMigration = state.buildings.some((b) => !b.storage || Object.keys(b.storage).length === 0);
+      if (needsMigration && parsed.resources) {
+        const townhall = state.buildings.find((b) => b.type === 'townhall');
+        if (townhall) {
+          townhall.storage = { ...parsed.resources };
+        } else {
+          for (const b of state.buildings) {
+            if (!b.storage) b.storage = {};
+          }
+        }
+      }
+      state.buildings = state.buildings.map((b) => ({
+        ...b,
+        storage: b.storage || {},
+      }));
+
       state.resourceCapacity = calculateResourceCapacity(state.buildings, state.technologies);
+      state.resources = calculateTotalResources(state.buildings);
       
       if (state.taskChains.length > 0) {
         state.taskChains = state.taskChains.map((c) => ({
@@ -386,12 +441,14 @@ const loadSave = (): GameState => {
       if (offlineSeconds > 60) {
         const totalGain: Partial<Resources> = {};
         const weatherEffects = calculateWeatherEffects(state.season, state.weather);
+        const perBuildingGain: Record<string, Partial<Resources>> = {};
         
         for (const b of state.buildings) {
           if (b.isBuilding) continue;
           const production = getBuildingProduction(b.type, b.level);
           if (Object.keys(production).length === 0) continue;
 
+          perBuildingGain[b.id] = {};
           const prodBonus = calculateTechBonus(state.technologies, 'production_boost', b.type);
           const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
           const totalProdBonus = 1 + prodBonus + globalProdBonus;
@@ -400,22 +457,38 @@ const loadSave = (): GameState => {
             const baseAmount = (rate as number) * offlineSeconds * totalProdBonus * OFFLINE_EFFICIENCY;
             const weatherMod = weatherEffects.resourceModifiers[key as keyof Resources] || 0;
             const amount = baseAmount * (1 + weatherMod);
+            perBuildingGain[b.id][key as keyof Resources] = amount;
             totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
           }
         }
 
-        for (const key of Object.keys(totalGain) as (keyof Resources)[]) {
-          const cap = state.resourceCapacity[key] - state.resources[key];
-          if (cap > 0) {
-            totalGain[key] = Math.min(totalGain[key]!, cap);
-          } else {
-            delete totalGain[key];
+        state.buildings = state.buildings.map((b) => {
+          const gain = perBuildingGain[b.id];
+          if (!gain) return b;
+          const newStorage = { ...(b.storage || {}) };
+          const cap = getBuildingCapacityByType(b.type, b.level);
+          for (const [key, amount] of Object.entries(gain)) {
+            const current = newStorage[key as keyof Resources] || 0;
+            const maxCap = cap[key as keyof Resources] || 0;
+            if (maxCap > 0) {
+              newStorage[key as keyof Resources] = Math.min(current + (amount as number), maxCap);
+            }
+          }
+          return { ...b, storage: newStorage };
+        });
+
+        state.resources = calculateTotalResources(state.buildings);
+
+        const finalGain: Partial<Resources> = {};
+        for (const [key, amount] of Object.entries(totalGain)) {
+          if ((amount as number) > 0.5) {
+            finalGain[key as keyof Resources] = Math.floor(amount as number);
           }
         }
 
-        if (Object.keys(totalGain).length > 0) {
+        if (Object.keys(finalGain).length > 0) {
           state.offlineEarnings = {
-            resources: totalGain,
+            resources: finalGain,
             duration: offlineSeconds,
             collected: false,
             timestamp: now,
@@ -436,6 +509,12 @@ interface GameStore extends GameState {
   canAfford: (cost: Partial<Resources>) => boolean;
   spendResources: (cost: Partial<Resources>) => boolean;
   addResources: (gain: Partial<Resources>) => void;
+
+  addResourcesToBuilding: (buildingId: string, gain: Partial<Resources>) => Partial<Resources>;
+  removeResourcesFromBuilding: (buildingId: string, cost: Partial<Resources>) => boolean;
+  getBuildingStorage: (buildingId: string) => Partial<Resources>;
+  getBuildingCapacity: (buildingId: string) => Partial<Resources>;
+  getAllBuildingStorageInfo: () => BuildingStorageInfo[];
 
   buildBuilding: (type: BuildingType, x: number, y: number) => boolean;
   upgradeBuilding: (buildingId: string) => boolean;
@@ -503,6 +582,7 @@ interface GameStore extends GameState {
   collectOfflineEarnings: () => boolean;
   
   getStorageUsagePercent: (resource: ResourceType) => number;
+  getBuildingStorageUsagePercent: (buildingId: string, resource: ResourceType) => number;
 
   tick: (delta: number) => void;
   saveGame: () => void;
@@ -514,35 +594,179 @@ export const useGameStore = create<GameStore>((set, get) => ({
   ...loadSave(),
 
   canAfford: (cost) => {
-    const { resources } = get();
+    const { buildings } = get();
+    const total = calculateTotalResources(buildings);
     return Object.entries(cost).every(
-      ([key, amount]) => resources[key as keyof Resources] >= (amount as number)
+      ([key, amount]) => (total[key as keyof Resources] || 0) >= (amount as number)
     );
   },
 
   spendResources: (cost) => {
     const state = get();
-    if (!state.canAfford(cost)) return false;
-    const newResources = { ...state.resources };
+    const { buildings } = state;
+    const total = calculateTotalResources(buildings);
     for (const [key, amount] of Object.entries(cost)) {
-      newResources[key as keyof Resources] -= amount as number;
+      if ((total[key as keyof Resources] || 0) < (amount as number)) {
+        return false;
+      }
     }
-    set({ resources: newResources });
+
+    const sortedBuildings = [...buildings].sort((a, b) => {
+      const aStorage = a.storage || {};
+      const bStorage = b.storage || {};
+      const aHasCost = Object.keys(cost).some((k) => (aStorage as any)[k] > 0);
+      const bHasCost = Object.keys(cost).some((k) => (bStorage as any)[k] > 0);
+      if (aHasCost !== bHasCost) return aHasCost ? -1 : 1;
+      return 0;
+    });
+
+    const remaining = { ...cost } as Record<string, number>;
+    const newBuildings = sortedBuildings.map((b) => {
+      const newStorage = { ...(b.storage || {}) };
+      for (const key of Object.keys(remaining)) {
+        if (remaining[key] <= 0) continue;
+        const available = newStorage[key as keyof Resources] || 0;
+        if (available > 0) {
+          const deduct = Math.min(available, remaining[key]);
+          newStorage[key as keyof Resources] = available - deduct;
+          remaining[key] -= deduct;
+        }
+      }
+      return { ...b, storage: newStorage };
+    });
+
+    const finalBuildings = buildings.map((b) => {
+      const updated = newBuildings.find((nb) => nb.id === b.id);
+      return updated || b;
+    });
+
+    set({
+      buildings: finalBuildings,
+      resources: calculateTotalResources(finalBuildings),
+    });
     return true;
   },
 
   addResources: (gain) => {
     const state = get();
-    const newResources = { ...state.resources };
-    for (const [key, amount] of Object.entries(gain)) {
-      const resourceKey = key as keyof Resources;
-      const capped = Math.min(
-        newResources[resourceKey] + (amount as number),
-        state.resourceCapacity[resourceKey]
-      );
-      newResources[resourceKey] = Math.max(0, capped);
+    const { buildings } = state;
+    const townhall = buildings.find((b) => b.type === 'townhall' && !b.isBuilding);
+    const warehouses = buildings.filter((b) => b.type === 'warehouse' && !b.isBuilding);
+    const targets = warehouses.length > 0 ? warehouses : (townhall ? [townhall] : []);
+
+    if (targets.length === 0) {
+      const newBuildings = buildings.map((b) => {
+        const newStorage = { ...(b.storage || {}) };
+        const cap = getBuildingCapacityByType(b.type, b.level);
+        for (const [key, amount] of Object.entries(gain)) {
+          const current = newStorage[key as keyof Resources] || 0;
+          const maxCap = cap[key as keyof Resources] || 0;
+          if (maxCap > 0) {
+            newStorage[key as keyof Resources] = Math.min(current + (amount as number), maxCap);
+          }
+        }
+        return { ...b, storage: newStorage };
+      });
+      set({ buildings: newBuildings, resources: calculateTotalResources(newBuildings) });
+      return;
     }
-    set({ resources: newResources });
+
+    const remaining = { ...gain } as Record<string, number>;
+    const newBuildings = buildings.map((b) => {
+      const isTarget = targets.some((t) => t.id === b.id);
+      if (!isTarget) return b;
+
+      const newStorage = { ...(b.storage || {}) };
+      const cap = getBuildingCapacityByType(b.type, b.level);
+      for (const key of Object.keys(remaining)) {
+        if (remaining[key] <= 0) continue;
+        const current = newStorage[key as keyof Resources] || 0;
+        const maxCap = cap[key as keyof Resources] || 0;
+        const available = maxCap > 0 ? maxCap - current : 0;
+        if (available > 0) {
+          const add = Math.min(available, remaining[key]);
+          newStorage[key as keyof Resources] = current + add;
+          remaining[key] -= add;
+        }
+      }
+      return { ...b, storage: newStorage };
+    });
+
+    set({ buildings: newBuildings, resources: calculateTotalResources(newBuildings) });
+  },
+
+  addResourcesToBuilding: (buildingId, gain) => {
+    const state = get();
+    const overflow: Partial<Resources> = {};
+    const newBuildings = state.buildings.map((b) => {
+      if (b.id !== buildingId) return b;
+      const newStorage = { ...(b.storage || {}) };
+      const cap = getBuildingCapacityByType(b.type, b.level);
+      for (const [key, amount] of Object.entries(gain)) {
+        const current = newStorage[key as keyof Resources] || 0;
+        const maxCap = cap[key as keyof Resources] || 0;
+        if (maxCap <= 0) {
+          overflow[key as keyof Resources] = (overflow[key as keyof Resources] || 0) + (amount as number);
+          continue;
+        }
+        const newTotal = current + (amount as number);
+        if (newTotal > maxCap) {
+          overflow[key as keyof Resources] = (overflow[key as keyof Resources] || 0) + (newTotal - maxCap);
+          newStorage[key as keyof Resources] = maxCap;
+        } else {
+          newStorage[key as keyof Resources] = newTotal;
+        }
+      }
+      return { ...b, storage: newStorage };
+    });
+    set({ buildings: newBuildings, resources: calculateTotalResources(newBuildings) });
+    return overflow;
+  },
+
+  removeResourcesFromBuilding: (buildingId, cost) => {
+    const state = get();
+    const building = state.buildings.find((b) => b.id === buildingId);
+    if (!building) return false;
+
+    for (const [key, amount] of Object.entries(cost)) {
+      const available = (building.storage || {})[key as keyof Resources] || 0;
+      if (available < (amount as number)) return false;
+    }
+
+    const newBuildings = state.buildings.map((b) => {
+      if (b.id !== buildingId) return b;
+      const newStorage = { ...(b.storage || {}) };
+      for (const [key, amount] of Object.entries(cost)) {
+        newStorage[key as keyof Resources] = (newStorage[key as keyof Resources] || 0) - (amount as number);
+      }
+      return { ...b, storage: newStorage };
+    });
+    set({ buildings: newBuildings, resources: calculateTotalResources(newBuildings) });
+    return true;
+  },
+
+  getBuildingStorage: (buildingId) => {
+    const b = get().buildings.find((b) => b.id === buildingId);
+    return b ? (b.storage || {}) : {};
+  },
+
+  getBuildingCapacity: (buildingId) => {
+    const b = get().buildings.find((b) => b.id === buildingId);
+    return b ? getBuildingCapacityByType(b.type, b.level) : {};
+  },
+
+  getAllBuildingStorageInfo: () => {
+    const { buildings } = get();
+    return buildings
+      .filter((b) => !b.isBuilding)
+      .map((b) => ({
+        buildingId: b.id,
+        buildingType: b.type,
+        buildingName: BUILDINGS[b.type]?.name || b.type,
+        storage: b.storage || {},
+        capacity: getBuildingCapacityByType(b.type, b.level),
+      }))
+      .filter((info) => Object.keys(info.capacity).length > 0);
   },
 
   buildBuilding: (type, x, y) => {
@@ -568,6 +792,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       isBuilding: true,
       buildProgress: 0,
       lastCollect: Date.now(),
+      storage: {},
     };
 
     const newUnlocked = [...state.unlockedBuildings];
@@ -585,6 +810,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       unlockedBuildings: newUnlocked,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
       resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
+      resources: calculateTotalResources(newBuildings),
     });
 
     state.updateTaskProgress('build_buildings', 1, type);
@@ -631,6 +857,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       unlockedBuildings: newUnlockedBuildings,
       maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
       resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
+      resources: calculateTotalResources(newBuildings),
     });
 
     state.updateTaskProgress('upgrade_buildings', 1);
@@ -654,20 +881,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const globalProdBonus = calculateTechBonus(state.technologies, 'production_boost');
       const totalProdBonus = 1 + prodBonus + globalProdBonus;
 
+      const newStorage = { ...(b.storage || {}) };
+      const cap = getBuildingCapacityByType(b.type, b.level);
+
       for (const [key, rate] of Object.entries(production)) {
         const baseAmount = (rate as number) * elapsed * totalProdBonus;
         const weatherMod = weatherEffects.resourceModifiers[key as keyof Resources] || 0;
         const amount = baseAmount * (1 + weatherMod);
-        totalGain[key as keyof Resources] = (totalGain[key as keyof Resources] || 0) + amount;
+        const resourceKey = key as keyof Resources;
+
+        const current = newStorage[resourceKey] || 0;
+        const maxCap = cap[resourceKey] || 0;
+        if (maxCap > 0) {
+          const actualAdd = Math.min(amount, maxCap - current);
+          if (actualAdd > 0) {
+            newStorage[resourceKey] = current + actualAdd;
+            totalGain[resourceKey] = (totalGain[resourceKey] || 0) + actualAdd;
+          }
+        }
       }
 
-      return { ...b, lastCollect: now };
+      return { ...b, lastCollect: now, storage: newStorage };
     });
 
-    if (Object.keys(totalGain).length > 0) {
-      state.addResources(totalGain);
-    }
-    set({ buildings: updatedBuildings });
+    set({
+      buildings: updatedBuildings,
+      resources: calculateTotalResources(updatedBuildings),
+      resourceCapacity: calculateResourceCapacity(updatedBuildings, state.technologies),
+    });
     return totalGain;
   },
 
@@ -2392,7 +2633,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const state = get();
     const capacity = (state.resourceCapacity as any)[resource];
     if (capacity <= 0) return 100;
-    return Math.min(100, ((state.resources as any)[resource] / capacity) * 100);
+    const total = calculateTotalResources(state.buildings);
+    return Math.min(100, ((total as any)[resource] / capacity) * 100);
+  },
+
+  getBuildingStorageUsagePercent: (buildingId, resource) => {
+    const state = get();
+    const building = state.buildings.find((b) => b.id === buildingId);
+    if (!building) return 0;
+    const cap = getBuildingCapacityByType(building.type, building.level);
+    const maxCap = (cap as any)[resource] || 0;
+    if (maxCap <= 0) return 0;
+    const current = (building.storage || {})[resource] || 0;
+    return Math.min(100, (current / maxCap) * 100);
   },
 
   startTransport: (resource, amount, fromBuildingId, toBuildingId) => {
@@ -2408,7 +2661,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const toBuilding = state.buildings.find((b) => b.id === toBuildingId);
     if (!fromBuilding || !toBuilding) return false;
 
-    if ((state.resources as any)[resource] < amount) return false;
+    const fromAvailable = (fromBuilding.storage || {})[resource] || 0;
+    if (fromAvailable < amount) return false;
 
     const caravanseraiLevel = state.buildings
       .filter((b) => b.type === 'caravanserai' && !b.isBuilding)
@@ -2428,8 +2682,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       speed: speedBonus,
     };
 
-    state.spendResources({ [resource]: amount });
-    set({ transportTasks: [...state.transportTasks, transportTask] });
+    state.removeResourcesFromBuilding(fromBuildingId, { [resource]: amount });
+    set({ transportTasks: [...get().transportTasks, transportTask] });
 
     return true;
   },
@@ -2440,7 +2694,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!task) return false;
 
     const refundAmount = Math.floor(task.amount * 0.8);
-    state.addResources({ [task.resource]: refundAmount });
+    state.addResourcesToBuilding(task.fromBuildingId, { [task.resource]: refundAmount });
     set({
       transportTasks: state.transportTasks.filter((t) => t.id !== taskId),
     });
@@ -2466,7 +2720,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (completedTasks.length > 0) {
       for (const task of completedTasks) {
-        state.addResources({ [task.resource]: task.amount });
+        get().addResourcesToBuilding(task.toBuildingId, { [task.resource]: task.amount });
       }
       set({ transportTasks: updatedTasks });
     } else if (updatedTasks.length !== state.transportTasks.length) {
@@ -2481,10 +2735,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
     let newEvents = [...state.spoilageEvents];
 
     if (newCooldown <= 0 && newEvents.length < 2) {
-      const eventData = generateSpoilageEvent(Math.floor(state.day), state.resources as any);
+      const total = calculateTotalResources(state.buildings);
+      const eventData = generateSpoilageEvent(Math.floor(state.day), total as any);
       if (eventData) {
-        const newResources = { ...state.resources };
-        (newResources as any)[eventData.resource] = Math.max(0, (newResources as any)[eventData.resource] - eventData.lossAmount);
+        let remainingLoss = eventData.lossAmount;
+        const sortedBuildings = [...state.buildings]
+          .filter((b) => !b.isBuilding && ((b.storage || {})[eventData.resource] || 0) > 0)
+          .sort((a, b) => ((b.storage || {})[eventData.resource] || 0) - ((a.storage || {})[eventData.resource] || 0));
+
+        const newBuildings = sortedBuildings.map((b) => {
+          if (remainingLoss <= 0) return b;
+          const available = (b.storage || {})[eventData.resource] || 0;
+          const deduct = Math.min(available, remainingLoss);
+          remainingLoss -= deduct;
+          return {
+            ...b,
+            storage: {
+              ...(b.storage || {}),
+              [eventData.resource]: available - deduct,
+            },
+          };
+        });
+
+        const finalBuildings = state.buildings.map((b) => {
+          const updated = newBuildings.find((nb) => nb.id === b.id);
+          return updated || b;
+        });
 
         const spoilageEvent: SpoilageEvent = {
           id: generateId(),
@@ -2501,7 +2777,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
         };
 
         newEvents.push(spoilageEvent);
-        set({ resources: newResources, spoilageEvents: newEvents });
+        set({
+          buildings: finalBuildings,
+          resources: calculateTotalResources(finalBuildings),
+          spoilageEvents: newEvents,
+        });
       }
       newCooldown = SPOILAGE_COOLDOWN_MIN + Math.random() * (SPOILAGE_COOLDOWN_MAX - SPOILAGE_COOLDOWN_MIN);
     }

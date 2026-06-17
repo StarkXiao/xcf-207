@@ -6,7 +6,7 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     name: '部落大厅',
     description: '部落的核心建筑，升级可解锁更多建筑和功能',
     icon: '🏛️',
-    baseCost: { wood: 0, stone: 0, gold: 0 },
+    baseCost: { wood: 200, stone: 150, gold: 50 },
     maxLevel: 10,
     upgradeMultiplier: 1.8,
     baseCapacity: 100,

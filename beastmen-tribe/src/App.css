@@ -951,6 +951,37 @@ body {
   color: #8b5a2b;
 }
 
+.unlock-progress {
+  margin-top: 16px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #a08060;
+  padding: 4px 0;
+}
+
+.progress-item.done {
+  color: #81c784;
+}
+
+.progress-item .check {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 900px) {
   .main-content {
     flex-direction: column;

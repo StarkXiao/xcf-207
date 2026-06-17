@@ -140,7 +140,7 @@ export class VillageScene extends Phaser.Scene {
         bg.setFillStyle(building.isBuilding ? 0x888888 : 0x5d4037);
       });
       container.on('pointerdown', () => {
-        this.events.emit('selectBuilding', building.id);
+        useGameStore.getState().selectBuilding(building.id);
       });
 
       this.buildings.set(building.id, container);
@@ -153,7 +153,15 @@ export class VillageScene extends Phaser.Scene {
 
     if (this.lastTick >= 0.5) {
       useGameStore.getState().tick(this.lastTick);
+      const selectedId = useGameStore.getState().selectedBuildingId;
       this.renderBuildings();
+
+      if (selectedId && this.buildings.has(selectedId)) {
+        const b = this.buildings.get(selectedId)!;
+        const bg = b.getAt(0) as Phaser.GameObjects.Rectangle;
+        bg.setStrokeStyle(3, 0xffd700);
+      }
+
       this.lastTick = 0;
     }
   }

@@ -129,6 +129,7 @@ export interface GameState {
   trades: TradeOffer[];
   unlockedBuildings: BuildingType[];
   unlockedWarriors: WarriorType[];
+  selectedBuildingId: string | null;
   lastSave: number;
   totalWins: number;
   totalLosses: number;

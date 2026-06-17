@@ -23,10 +23,10 @@ const createInitialState = (): GameState => ({
   tribeName: '血牙部落',
   day: 1,
   resources: {
-    food: 200,
-    wood: 150,
-    stone: 100,
-    gold: 50,
+    food: 300,
+    wood: 250,
+    stone: 180,
+    gold: 120,
     iron: 0,
   },
   buildings: [
@@ -47,6 +47,7 @@ const createInitialState = (): GameState => ({
   trades: generateTrades(6),
   unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall'],
   unlockedWarriors: ['grunt'],
+  selectedBuildingId: null,
   lastSave: Date.now(),
   totalWins: 0,
   totalLosses: 0,
@@ -57,7 +58,11 @@ const loadSave = (): GameState => {
     const saved = localStorage.getItem(SAVE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved) as GameState;
-      return { ...parsed, trades: generateTrades(6) };
+      return {
+        ...parsed,
+        trades: generateTrades(6),
+        selectedBuildingId: null,
+      };
     }
   } catch (e) {
     console.error('Failed to load save:', e);
@@ -73,6 +78,7 @@ interface GameStore extends GameState {
   buildBuilding: (type: BuildingType, x: number, y: number) => boolean;
   upgradeBuilding: (buildingId: string) => boolean;
   collectResources: () => Partial<Resources>;
+  selectBuilding: (buildingId: string | null) => void;
 
   trainWarrior: (type: WarriorType) => boolean;
   processTraining: (delta: number) => Warrior[];
@@ -140,12 +146,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     };
 
     const newUnlocked = [...state.unlockedBuildings];
-    if (type === 'townhall') {
-      if (state.buildings.find((b) => b.type === 'townhall')!.level >= 1) {
-        if (!newUnlocked.includes('barracks')) newUnlocked.push('barracks');
-        if (!newUnlocked.includes('market')) newUnlocked.push('market');
-      }
-    }
     if (type === 'barracks') {
       if (!newUnlocked.includes('smithy')) newUnlocked.push('smithy');
     }
@@ -155,6 +155,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       unlockedBuildings: newUnlocked,
     });
     return true;
+  },
+
+  selectBuilding: (buildingId) => {
+    set({ selectedBuildingId: buildingId });
   },
 
   upgradeBuilding: (buildingId) => {
@@ -168,10 +172,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!state.spendResources(cost)) return false;
 
     const newWarriors = [...state.unlockedWarriors];
+    const newUnlockedBuildings = [...state.unlockedBuildings];
     const newBuildings = state.buildings.map((b) => {
       if (b.id !== buildingId) return b;
       const newLevel = b.level + 1;
 
+      if (b.type === 'townhall') {
+        if (newLevel >= 2) {
+          if (!newUnlockedBuildings.includes('barracks')) newUnlockedBuildings.push('barracks');
+          if (!newUnlockedBuildings.includes('market')) newUnlockedBuildings.push('market');
+        }
+      }
       if (b.type === 'barracks') {
         if (newLevel >= 2 && !newWarriors.includes('archer')) newWarriors.push('archer');
         if (newLevel >= 3 && !newWarriors.includes('shaman')) newWarriors.push('shaman');
@@ -184,7 +195,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { ...b, level: newLevel };
     });
 
-    set({ buildings: newBuildings, unlockedWarriors: newWarriors });
+    set({
+      buildings: newBuildings,
+      unlockedWarriors: newWarriors,
+      unlockedBuildings: newUnlockedBuildings,
+    });
     return true;
   },
 

@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { BUILDINGS, getBuildingCost, getBuildingProduction } from '../data/buildings';
 import { RESOURCE_INFO } from '../data/trades';
@@ -9,21 +8,23 @@ interface Props {
 }
 
 export function BuildingPanel({ gameRef }: Props) {
-  const [selectedBuilding, setSelectedBuilding] = useState<string | null>(null);
   const buildings = useGameStore((s) => s.buildings);
   const unlockedBuildings = useGameStore((s) => s.unlockedBuildings);
   const canAfford = useGameStore((s) => s.canAfford);
   const upgradeBuilding = useGameStore((s) => s.upgradeBuilding);
+  const selectBuilding = useGameStore((s) => s.selectBuilding);
   const resources = useGameStore((s) => s.resources);
+  const selectedBuildingId = useGameStore((s) => s.selectedBuildingId);
 
   const handleBuild = (type: BuildingType) => {
     const scene = gameRef.current?.scene?.getScene('VillageScene');
     if (scene) {
+      selectBuilding(null);
       scene.events.emit('startPlacing', type);
     }
   };
 
-  const selected = buildings.find((b) => b.id === selectedBuilding);
+  const selected = buildings.find((b) => b.id === selectedBuildingId);
 
   return (
     <div className="panel building-panel">
@@ -91,7 +92,7 @@ export function BuildingPanel({ gameRef }: Props) {
 
           <button
             className="btn btn-secondary btn-small"
-            onClick={() => setSelectedBuilding(null)}
+            onClick={() => selectBuilding(null)}
             style={{ marginTop: '8px' }}
           >
             取消选择
@@ -100,34 +101,77 @@ export function BuildingPanel({ gameRef }: Props) {
       )}
 
       {!selected && (
-        <div className="building-grid">
-          {unlockedBuildings.map((type) => {
-            const config = BUILDINGS[type];
-            const cost = getBuildingCost(type, 0);
-            const affordable = canAfford(cost);
-            return (
-              <div
-                key={type}
-                className={`building-card ${affordable ? '' : 'disabled'}`}
-                onClick={() => affordable && handleBuild(type)}
-              >
-                <div className="building-icon">{config.icon}</div>
-                <div className="building-name">{config.name}</div>
-                <div className="building-cost">
-                  {Object.entries(cost).map(([res, amount]) => (
-                    <span key={res} className="cost-mini">
-                      {RESOURCE_INFO[res as keyof typeof RESOURCE_INFO].icon}
-                      {amount as number}
-                    </span>
-                  ))}
+        <>
+          <div className="building-grid">
+            {unlockedBuildings.map((type) => {
+              const config = BUILDINGS[type];
+              const cost = getBuildingCost(type, 0);
+              const affordable = canAfford(cost);
+              return (
+                <div
+                  key={type}
+                  className={`building-card ${affordable ? '' : 'disabled'}`}
+                  onClick={() => affordable && handleBuild(type)}
+                >
+                  <div className="building-icon">{config.icon}</div>
+                  <div className="building-name">{config.name}</div>
+                  <div className="building-cost">
+                    {Object.entries(cost).map(([res, amount]) => (
+                      <span key={res} className="cost-mini">
+                        {RESOURCE_INFO[res as keyof typeof RESOURCE_INFO].icon}
+                        {amount as number}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+
+          <UnlockProgress />
+        </>
       )}
 
-      <div className="hint">提示：点击建筑卡片后，在地图上点击放置。按 ESC 取消。</div>
+      <div className="hint">
+        {selected
+          ? '查看建筑详情，可升级提升产出或解锁新功能'
+          : '点击下方卡片建造新建筑，或点击地图上的建筑查看详情'}
+      </div>
+    </div>
+  );
+}
+
+function UnlockProgress() {
+  const buildings = useGameStore((s) => s.buildings);
+  const unlockedBuildings = useGameStore((s) => s.unlockedBuildings);
+  const townhall = buildings.find((b) => b.type === 'townhall');
+  const hasBarracks = buildings.some((b) => b.type === 'barracks');
+  const hasMarket = unlockedBuildings.includes('market');
+  const hasSmithy = unlockedBuildings.includes('smithy');
+
+  const thLevel = townhall?.level || 0;
+
+  return (
+    <div className="unlock-progress">
+      <div className="queue-title">🔓 解锁进度</div>
+      <div className="progress-list">
+        <div className={`progress-item ${thLevel >= 2 ? 'done' : ''}`}>
+          <span className="check">{thLevel >= 2 ? '✅' : '⬜'}</span>
+          <span>升级部落大厅到 Lv.2 → 解锁兵营、交易市场</span>
+        </div>
+        <div className={`progress-item ${hasBarracks ? 'done' : ''}`}>
+          <span className="check">{hasBarracks ? '✅' : '⬜'}</span>
+          <span>建造兵营 → 解锁铁匠铺</span>
+        </div>
+        <div className={`progress-item ${hasMarket ? 'done' : ''}`}>
+          <span className="check">{hasMarket ? '✅' : '⬜'}</span>
+          <span>建造交易市场 → 开启资源交易</span>
+        </div>
+        <div className={`progress-item ${hasSmithy ? 'done' : ''}`}>
+          <span className="check">{hasSmithy ? '✅' : '⬜'}</span>
+          <span>建造铁匠铺 → 解锁高级兵种</span>
+        </div>
+      </div>
     </div>
   );
 }

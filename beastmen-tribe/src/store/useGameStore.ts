@@ -1783,9 +1783,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   changeWeather: () => {
     const state = get();
     const newWeather = selectWeatherForSeason(state.season);
+    const newEffects = calculateWeatherEffects(state.season, newWeather);
     set({
       weather: newWeather,
       weatherDuration: getWeatherDuration(newWeather),
+      trades: generateTrades(6, newEffects.tradeModifier),
     });
   },
 
@@ -1814,10 +1816,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       weatherChanged = true;
     } else if (newWeatherDuration <= 0) {
       const newWeather = selectWeatherForSeason(state.season);
+      const newEffects = calculateWeatherEffects(state.season, newWeather);
       set({
         seasonProgress: newSeasonProgress,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
+        trades: generateTrades(6, newEffects.tradeModifier),
       });
       weatherChanged = true;
     } else {

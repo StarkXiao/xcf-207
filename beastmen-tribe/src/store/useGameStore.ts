@@ -696,6 +696,7 @@ interface GameStore extends GameState {
   startNightRaid: () => void;
   startNightRaidBattle: () => { result: 'victory' | 'defeat'; log: string[] };
   claimRaidReward: (reportId: string) => boolean;
+  closeNightRaidResult: () => void;
   processNightRaidTick: (delta: number) => void;
 
   tick: (delta: number) => void;
@@ -3561,14 +3562,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
       r.id === reportId ? { ...r, claimed: true } : r
     );
 
+    const activeRaid = state.nightRaid.activeRaid;
+    const shouldCloseActiveRaid = activeRaid && activeRaid.phase === 'result';
+
     set({
       nightRaid: {
         ...state.nightRaid,
         reports: newReports,
+        activeRaid: shouldCloseActiveRaid ? null : state.nightRaid.activeRaid,
+        nextRaidIn: shouldCloseActiveRaid ? BASE_RAID_COOLDOWN : state.nightRaid.nextRaidIn,
       },
     });
 
     return true;
+  },
+
+  closeNightRaidResult: () => {
+    const state = get();
+    const raid = state.nightRaid.activeRaid;
+    if (!raid || raid.phase !== 'result') return;
+
+    set({
+      nightRaid: {
+        ...state.nightRaid,
+        activeRaid: null,
+        nextRaidIn: BASE_RAID_COOLDOWN,
+      },
+    });
   },
 
   processNightRaidTick: (delta) => {
@@ -3578,6 +3598,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       let nextRaidIn = state.nightRaid.nextRaidIn - delta;
       if (nextRaidIn <= 0) {
         nextRaidIn = 0;
+        state.startNightRaid();
+        return;
       }
       if (nextRaidIn !== state.nightRaid.nextRaidIn) {
         set({

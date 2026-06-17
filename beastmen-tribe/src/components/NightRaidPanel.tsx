@@ -18,6 +18,7 @@ export function NightRaidPanel() {
   const startNightRaid = useGameStore((s) => s.startNightRaid);
   const startNightRaidBattle = useGameStore((s) => s.startNightRaidBattle);
   const claimRaidReward = useGameStore((s) => s.claimRaidReward);
+  const closeNightRaidResult = useGameStore((s) => s.closeNightRaidResult);
   const canAfford = useGameStore((s) => s.canAfford);
 
   const [selectedTab, setSelectedTab] = useState<'defense' | 'garrison' | 'reports'>('defense');
@@ -69,8 +70,13 @@ export function NightRaidPanel() {
   const handleClaimReward = (reportId: string) => {
     const success = claimRaidReward(reportId);
     if (success) {
-      showMessage('奖励已领取！', 'success');
+      showMessage('奖励已领取！进入下一轮备战', 'success');
     }
+  };
+
+  const handleCloseResult = () => {
+    closeNightRaidResult();
+    showMessage('已结算，进入下一轮备战', 'success');
   };
 
   const canBuildTrapType = (trapType: TrapType): boolean => {
@@ -174,12 +180,43 @@ export function NightRaidPanel() {
 
           {activeRaid.phase === 'result' && (
             <div className="raid-result-detail">
-              <button
-                className="btn btn-secondary"
-                onClick={() => setShowLog(showLog === activeRaid.id ? null : activeRaid.id)}
-              >
-                {showLog === activeRaid.id ? '隐藏战报' : '查看战报'}
-              </button>
+              {activeRaid.result === 'victory' && (
+                <div className="result-rewards">
+                  <span>胜利奖励：</span>
+                  {Object.entries(activeRaid.rewards).map(([res, amount]) => (
+                    <span key={res} className="reward-item">
+                      {RESOURCE_INFO[res as keyof typeof RESOURCE_INFO]?.icon || '📦'}
+                      +{amount}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="result-actions">
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setShowLog(showLog === activeRaid.id ? null : activeRaid.id)}
+                >
+                  {showLog === activeRaid.id ? '收起战报' : '查看战报'}
+                </button>
+
+                {activeRaid.result === 'victory' ? (
+                  <button
+                    className="btn btn-success"
+                    onClick={handleClaimReward.bind(null, nightRaid.reports[0]?.id || '')}
+                  >
+                    🎁 领取奖励并结算
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleCloseResult}
+                  >
+                    ✓ 确认结算
+                  </button>
+                )}
+              </div>
+
               {showLog === activeRaid.id && (
                 <div className="battle-log">
                   {activeRaid.battleLog.map((line, i) => (
@@ -189,6 +226,10 @@ export function NightRaidPanel() {
                   ))}
                 </div>
               )}
+
+              <div className="result-hint">
+                💡 结算后 {Math.ceil(120)} 秒将迎来下一波夜袭
+              </div>
             </div>
           )}
         </div>

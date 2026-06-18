@@ -268,6 +268,49 @@ export interface WarriorConfig {
   requires?: { building: BuildingType; level: number };
 }
 
+export type WeaponType = 'axe' | 'bow' | 'spear' | 'hammer' | 'sword' | 'staff';
+
+export interface WeaponConfig {
+  id: WeaponType;
+  name: string;
+  icon: string;
+  maxDurability: number;
+  attackBonus: number;
+  defenseBonus: number;
+  ironCost: number;
+  repairCost: number;
+  maintenanceCost: number;
+  warriorTypes: WarriorType[];
+  requires?: { building: BuildingType; level: number };
+}
+
+export interface Weapon {
+  type: WeaponType;
+  name: string;
+  icon: string;
+  durability: number;
+  maxDurability: number;
+  attackBonus: number;
+  defenseBonus: number;
+  ironCost: number;
+  repairCost: number;
+  maintenanceCost: number;
+}
+
+export type SupplyLineStatus = 'normal' | 'disrupted' | 'boosted';
+
+export interface ArsenalState {
+  supplyLineLevel: number;
+  lastMaintenanceDay: number;
+  repairHistory: Record<string, number[]>;
+  weapons: Record<WarriorType, WeaponConfig>;
+  maintenanceInterval: number;
+  autoRepair: boolean;
+  autoMaintenance: boolean;
+  supplyLineStatus: SupplyLineStatus;
+  supplyEfficiency: number;
+}
+
 export interface Warrior {
   id: string;
   type: WarriorType;
@@ -279,6 +322,7 @@ export interface Warrior {
   exp: number;
   position: PositionRow;
   morale: number;
+  weapon?: Weapon;
 }
 
 export interface TrainingQueue {
@@ -427,6 +471,7 @@ export interface TradeOffer {
   factionId?: FactionType;
   expiresAt?: number;
   minReputation?: number;
+  affectedBySupplyLine?: boolean;
 }
 
 export type RiskEventType = 'bandit_attack' | 'storm' | 'landslide' | 'beast_attack' | 'customs_check' | 'plague' | 'betrayal';
@@ -1486,4 +1531,5 @@ export interface GameState {
   blackMarketRefreshInterval: number;
   buildQueue: BuildQueueItem[];
   maxBuildQueueSize: number;
+  arsenal: ArsenalState;
 }

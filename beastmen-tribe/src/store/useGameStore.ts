@@ -70,6 +70,7 @@ import {
   getTotalAdjacencyProductionMultiplier,
 } from '../data/grid';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
+import { createInitialArsenalState } from '../data/arsenal';
 import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
 import { generateTrades } from '../data/trades';
 import { triggerRandomEvent } from '../data/events';
@@ -646,6 +647,7 @@ const createInitialState = (): GameState => {
     blackMarketRefreshInterval: 120,
     buildQueue: [],
     maxBuildQueueSize: 3,
+    arsenal: createInitialArsenalState(),
   };
 };
 

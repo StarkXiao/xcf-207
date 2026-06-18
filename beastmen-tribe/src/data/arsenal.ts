@@ -225,8 +225,10 @@ export const createInitialArsenalState = (): ArsenalState => {
   
   return {
     weapons,
+    supplyLineLevel: 1,
     lastMaintenanceDay: 0,
     maintenanceInterval: SUPPLY_LINE_MAINTENANCE_INTERVAL,
+    repairHistory: {},
     autoRepair: true,
     autoMaintenance: true,
     supplyLineStatus: 'normal',

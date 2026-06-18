@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getRequirementDescription, getBuildTime, getUpgradeTime } from '../data/buildings';
-import { MILESTONES } from '../data/milestones';
 import { RESOURCE_INFO } from '../data/trades';
 import type { BuildingType, Resources, BuildQueueItem, BuildingUpgradeHint, ProductionEstimate } from '../types';
+import { getBuildingGridSize } from '../data/grid';
 
 interface Props {
   gameRef: React.MutableRefObject<unknown>;
@@ -24,29 +24,18 @@ export function BuildingPanel({ gameRef }: Props) {
   const getUpgradeHints = useGameStore((s) => s.getUpgradeHints);
   const getUnlockableBuildings = useGameStore((s) => s.getUnlockableBuildings);
   const checkBuildingRequirements = useGameStore((s) => s.checkBuildingRequirements);
-  const getBuildingHasRedDot = useGameStore((s) => s.getBuildingHasRedDot);
-  const dismissRedDot = useGameStore((s) => s.dismissRedDot);
-  const getBuildingsToUnlockNext = useGameStore((s) => s.getBuildingsToUnlockNext);
-  const getNextMilestone = useGameStore((s) => s.getNextMilestone);
+  const getBuildingAdjacencyBonus = useGameStore((s) => s.getBuildingAdjacencyBonus);
+  const getBuildingAdjacencyMultiplier = useGameStore((s) => s.getBuildingAdjacencyMultiplier);
 
   const [showUpgradeHints, setShowUpgradeHints] = useState(false);
   const upgradeHints = getUpgradeHints();
   const unlockableBuildings = getUnlockableBuildings();
   const affordableHints = upgradeHints.filter((h) => h.canAfford);
-  const nextBuildings = getBuildingsToUnlockNext();
-  const nextMilestone = getNextMilestone();
 
   const handleBuild = (type: BuildingType) => {
     const game = gameRef.current as { scene?: { getScene: (name: string) => { events: { emit: (event: string, data: unknown) => void } } } };
     const scene = game.scene?.getScene('VillageScene');
     if (scene) {
-      if (getBuildingHasRedDot(type)) {
-        for (const m of MILESTONES) {
-          if (m.redDots.some((rd) => rd.type === 'building' && rd.target === type)) {
-            dismissRedDot(m.id, 'building', type);
-          }
-        }
-      }
       selectBuilding(null);
       scene.events.emit('startPlacing', type);
     }
@@ -127,7 +116,6 @@ export function BuildingPanel({ gameRef }: Props) {
               const config = BUILDINGS[type];
               const cost = getBuildingCost(type, 0);
               const affordable = canAfford(cost);
-              const hasRedDot = getBuildingHasRedDot(type);
               return (
                 <div
                   key={type}
@@ -135,10 +123,7 @@ export function BuildingPanel({ gameRef }: Props) {
                   onClick={() => affordable && handleBuild(type)}
                 >
                   <span className="unlockable-icon">{config.icon}</span>
-                  <span className="unlockable-name">
-                    {config.name}
-                    {hasRedDot && <span className="red-dot">●</span>}
-                  </span>
+                  <span className="unlockable-name">{config.name}</span>
                   <span className="unlockable-tag">NEW</span>
                 </div>
               );
@@ -212,16 +197,60 @@ export function BuildingPanel({ gameRef }: Props) {
             0 && (
             <div className="production-list">
               <div className="cost-label">当前产出/秒：</div>
-              {Object.entries(getBuildingProduction(selected.type, selected.level)).map(
-                ([res, amount]) => (
-                  <span key={res} className="production-item">
-                    {RESOURCE_INFO[res as keyof typeof RESOURCE_INFO].icon} +
-                    {amount as number}/s
-                  </span>
-                )
-              )}
+              {(() => {
+                const adjacencyBonus = getBuildingAdjacencyBonus(selected.id);
+                const adjacencyMultiplier = getBuildingAdjacencyMultiplier(selected.id);
+                return (
+                  <>
+                    {Object.entries(getBuildingProduction(selected.type, selected.level)).map(
+                      ([res, amount]) => (
+                        <span key={res} className="production-item">
+                          {RESOURCE_INFO[res as keyof typeof RESOURCE_INFO].icon} +
+                          {((amount as number) * adjacencyMultiplier).toFixed(2)}/s
+                          {adjacencyBonus.totalBonusPercent > 0 && (
+                            <span className="bonus-positive"> (含+{adjacencyBonus.totalBonusPercent}%邻接)</span>
+                          )}
+                        </span>
+                      )
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
+
+          {(() => {
+            const adjacencyBonus = getBuildingAdjacencyBonus(selected.id);
+            const config = BUILDINGS[selected.type];
+            const gridSize = getBuildingGridSize(selected.type);
+            return (
+              <div className="adjacency-info">
+                <div className="cost-label">
+                  📐 占地: {gridSize.width}x{gridSize.height}格
+                </div>
+                {adjacencyBonus.totalBonusPercent > 0 ? (
+                  <div className="adjacency-bonus-active">
+                    <div className="bonus-title">🏆 当前邻接加成: +{adjacencyBonus.totalBonusPercent}%</div>
+                    {adjacencyBonus.bonusDetails.map((detail, idx) => (
+                      <div key={idx} className="bonus-detail">
+                        ↳ {detail.neighborBuildingName}: +{detail.bonusPercent}%
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {config.adjacencyBonusRules && config.adjacencyBonusRules.length > 0 && (
+                  <div className="adjacency-rules">
+                    <div className="rules-title">💡 邻接加成规则:</div>
+                    {config.adjacencyBonusRules.map((rule, idx) => (
+                      <div key={idx} className="rule-detail">
+                        ↳ {rule.description}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <button
             className="btn btn-secondary btn-small"
@@ -242,7 +271,6 @@ export function BuildingPanel({ gameRef }: Props) {
               const affordable = canAfford(cost);
               const { met, missing } = checkBuildingRequirements(type);
               const canBuildNow = met && affordable && buildQueue.length < maxBuildQueueSize;
-              const hasRedDot = getBuildingHasRedDot(type);
 
               return (
                 <div
@@ -252,10 +280,7 @@ export function BuildingPanel({ gameRef }: Props) {
                   title={!met ? missing.map(getRequirementDescription).join('\n') : ''}
                 >
                   <div className="building-icon">{config.icon}</div>
-                  <div className="building-name">
-                    {config.name}
-                    {hasRedDot && <span className="red-dot">●</span>}
-                  </div>
+                  <div className="building-name">{config.name}</div>
                   <div className="building-cost">
                     {Object.entries(cost).map(([res, amount]) => (
                       <span key={res} className="cost-mini">
@@ -266,6 +291,9 @@ export function BuildingPanel({ gameRef }: Props) {
                   </div>
                   <div className="building-time">
                     ⏱️ {getBuildTime(type)}s
+                    <span style={{ marginLeft: '8px' }}>
+                      📐 {getBuildingGridSize(type).width}x{getBuildingGridSize(type).height}
+                    </span>
                   </div>
                   {!met && (
                     <div className="building-locked">
@@ -276,25 +304,6 @@ export function BuildingPanel({ gameRef }: Props) {
               );
             })}
           </div>
-
-          {nextBuildings.length > 0 && nextMilestone && (
-            <div className="milestone-preview-box">
-              <div className="milestone-preview-header">
-                <span>🔓 下一里程碑解锁 ({nextMilestone.icon} Lv.{nextMilestone.townhallLevel})</span>
-              </div>
-              <div className="milestone-preview-items">
-                {nextBuildings.map((b) => {
-                  const config = BUILDINGS[b];
-                  return (
-                    <div key={b} className="milestone-preview-item locked">
-                      <span className="milestone-preview-icon">{config.icon}</span>
-                      <span className="milestone-preview-name">{config.name}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           <UnlockProgress />
         </>

@@ -176,41 +176,6 @@ body {
   font-weight: 600;
 }
 
-.tab-btn {
-  position: relative;
-}
-
-.tab-new-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  font-size: 8px;
-  font-weight: bold;
-  color: #fff;
-  background: #ff4444;
-  padding: 1px 4px;
-  border-radius: 4px;
-  animation: badge-flash 1s ease-in-out infinite;
-  letter-spacing: 0.5px;
-}
-
-@keyframes badge-flash {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.tab-red-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 8px;
-  height: 8px;
-  background: #ff4444;
-  border-radius: 50%;
-  animation: red-dot-pulse 1.2s ease-in-out infinite;
-  box-shadow: 0 0 6px rgba(255, 68, 68, 0.8);
-}
-
 .panel-content {
   flex: 1;
   overflow-y: auto;
@@ -5690,84 +5655,6 @@ body {
   border-left: 3px solid #2196f3;
 }
 
-.supply-line-status {
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
-  border: 1px solid rgba(139, 90, 43, 0.4);
-}
-
-.supply-line-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.supply-line-icon {
-  font-size: 20px;
-}
-
-.supply-line-title {
-  font-size: 14px;
-  font-weight: bold;
-  color: #f5e6d3;
-  flex: 1;
-}
-
-.supply-line-status-badge {
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 12px;
-  font-weight: 600;
-}
-
-.supply-line-status-badge.normal {
-  background: rgba(52, 152, 219, 0.2);
-  color: #3498db;
-}
-
-.supply-line-status-badge.boosted {
-  background: rgba(39, 174, 96, 0.2);
-  color: #2ecc71;
-}
-
-.supply-line-status-badge.disrupted {
-  background: rgba(231, 76, 60, 0.2);
-  color: #e74c3c;
-}
-
-.supply-line-effects {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.supply-line-effect {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  color: #b8a082;
-}
-
-.supply-line-effect .positive {
-  color: #2ecc71;
-  font-weight: 600;
-}
-
-.supply-line-effect .negative {
-  color: #e74c3c;
-  font-weight: 600;
-}
-
-.supply-line-tag {
-  font-size: 12px;
-  margin-left: 4px;
-  cursor: help;
-}
-
 .price-overview {
   background: rgba(0, 0, 0, 0.25);
   border-radius: 10px;
@@ -7340,501 +7227,64 @@ body {
   margin-bottom: 10px;
 }
 
-.red-dot {
-  color: #ff4444;
+.adjacency-info {
+  margin: 12px 0;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+}
+
+.adjacency-bonus-active {
+  margin-top: 8px;
+  padding: 8px;
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.15), rgba(255, 193, 7, 0.1));
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 6px;
+}
+
+.bonus-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #ffd700;
+  margin-bottom: 6px;
+}
+
+.bonus-detail {
+  font-size: 11px;
+  color: #ffca28;
+  padding: 2px 0;
+  padding-left: 8px;
+}
+
+.adjacency-rules {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(66, 165, 245, 0.1);
+  border: 1px solid rgba(66, 165, 245, 0.2);
+  border-radius: 6px;
+}
+
+.rules-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64b5f6;
+  margin-bottom: 6px;
+}
+
+.rule-detail {
+  font-size: 11px;
+  color: #90caf9;
+  padding: 2px 0;
+  padding-left: 8px;
+}
+
+.bonus-positive {
+  color: #ffd700;
   font-size: 10px;
   margin-left: 4px;
-  animation: red-dot-pulse 1.2s ease-in-out infinite;
-  display: inline-block;
-  vertical-align: super;
-  text-shadow: 0 0 6px rgba(255, 68, 68, 0.8);
 }
 
-@keyframes red-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(1.3); }
-}
-
-.milestone-popup-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-  animation: fade-in 0.3s ease-out;
-}
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.milestone-popup {
-  background: linear-gradient(135deg, #3e2723 0%, #5d4037 50%, #4e342e 100%);
-  border: 3px solid #ffb74d;
-  border-radius: 16px;
-  padding: 28px 32px;
-  min-width: 380px;
-  max-width: 480px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 40px rgba(255, 183, 77, 0.2);
-  animation: popup-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-@keyframes popup-in {
-  from { transform: scale(0.8) translateY(20px); opacity: 0; }
-  to { transform: scale(1) translateY(0); opacity: 1; }
-}
-
-.milestone-popup-header {
-  text-align: center;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 2px solid rgba(255, 183, 77, 0.3);
-}
-
-.milestone-popup-badge {
-  font-size: 56px;
-  display: block;
-  margin-bottom: 8px;
-  animation: badge-bounce 0.6s ease-out;
-}
-
-@keyframes badge-bounce {
-  0% { transform: scale(0) rotate(-180deg); }
-  60% { transform: scale(1.2) rotate(10deg); }
-  100% { transform: scale(1) rotate(0); }
-}
-
-.milestone-popup-label {
-  font-size: 13px;
-  color: #ffb74d;
-  letter-spacing: 2px;
-  margin-bottom: 6px;
-  text-transform: uppercase;
-}
-
-.milestone-popup-name {
-  font-size: 26px;
-  font-weight: bold;
-  color: #ffe0b2;
-  margin-bottom: 4px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-}
-
-.milestone-popup-level {
-  font-size: 14px;
-  color: #bcaaa4;
-}
-
-.milestone-popup-desc {
-  text-align: center;
-  color: #d7ccc8;
-  font-size: 14px;
-  line-height: 1.6;
-  margin-bottom: 20px;
-  padding: 12px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 8px;
-}
-
-.milestone-popup-story {
-  margin-bottom: 16px;
-  padding: 14px;
-  background: linear-gradient(135deg, rgba(255, 152, 0, 0.08) 0%, rgba(255, 183, 77, 0.04) 100%);
-  border: 1px solid rgba(255, 152, 0, 0.2);
-  border-radius: 10px;
-}
-
-.milestone-popup-story-text {
-  color: #ffe0b2;
-  font-size: 13px;
-  line-height: 1.8;
-  font-style: italic;
-  text-indent: 2em;
-}
-
-.milestone-popup-section {
-  margin-bottom: 14px;
-}
-
-.milestone-popup-section-title {
-  font-size: 12px;
-  color: #ffb74d;
-  margin-bottom: 8px;
-  font-weight: bold;
-  letter-spacing: 1px;
-}
-
-.milestone-popup-unlock-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.milestone-popup-unlock-item {
-  background: rgba(255, 183, 77, 0.15);
-  border: 1px solid rgba(255, 183, 77, 0.3);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #ffe0b2;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.milestone-popup-reward-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.milestone-popup-reward-item {
-  background: rgba(129, 199, 132, 0.15);
-  border: 1px solid rgba(129, 199, 132, 0.3);
-  padding: 8px 14px;
-  border-radius: 6px;
-  font-size: 14px;
-  color: #c8e6c9;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.milestone-popup-footer {
-  margin-top: 20px;
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-
-.milestone-popup-footer .btn {
-  min-width: 120px;
-}
-
-.milestone-panel {
-  max-height: 75vh;
-  overflow-y: auto;
-}
-
-.milestone-current-section {
-  background: linear-gradient(135deg, rgba(255, 183, 77, 0.1) 0%, rgba(255, 152, 0, 0.05) 100%);
-  border: 2px solid rgba(255, 183, 77, 0.3);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-.milestone-current-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 14px;
-  gap: 12px;
-}
-
-.milestone-current-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.milestone-current-icon {
-  font-size: 42px;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
-}
-
-.milestone-current-name {
-  font-size: 18px;
-  font-weight: bold;
-  color: #ffe0b2;
-  margin-bottom: 4px;
-}
-
-.milestone-current-level {
-  font-size: 13px;
-  color: #ffb74d;
-}
-
-.milestone-next-info {
-  text-align: right;
-  background: rgba(0, 0, 0, 0.2);
-  padding: 8px 12px;
-  border-radius: 8px;
-}
-
-.milestone-next-label {
-  font-size: 11px;
-  color: #8a7060;
-  margin-bottom: 4px;
-}
-
-.milestone-next-name {
-  font-size: 13px;
-  color: #bcaaa4;
-  font-weight: 500;
-}
-
-.milestone-progress-bar-container {
-  position: relative;
-  height: 22px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 11px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 183, 77, 0.2);
-}
-
-.milestone-progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #ff9800 0%, #ffb74d 50%, #ffcc80 100%);
-  border-radius: 11px;
-  transition: width 0.6s ease-out;
-  box-shadow: 0 0 12px rgba(255, 183, 77, 0.5);
-}
-
-.milestone-progress-text {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 12px;
-  font-weight: bold;
-  color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-}
-
-.milestone-next-section {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 10px;
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid rgba(255, 183, 77, 0.1);
-}
-
-.milestone-next-description {
-  color: #d7ccc8;
-  font-size: 13px;
-  margin: 10px 0 12px 0;
-  line-height: 1.5;
-}
-
-.milestone-next-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-
-.milestone-next-label {
-  color: #8a7060;
-  font-size: 12px;
-  flex-shrink: 0;
-  padding-top: 4px;
-  min-width: 70px;
-}
-
-.milestone-next-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  flex: 1;
-}
-
-.milestone-next-item {
-  background: rgba(255, 183, 77, 0.1);
-  border: 1px solid rgba(255, 183, 77, 0.25);
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  color: #ffe0b2;
-}
-
-.milestone-next-item.reward {
-  background: rgba(129, 199, 132, 0.15);
-  border-color: rgba(129, 199, 132, 0.3);
-  color: #c8e6c9;
-}
-
-.milestone-list-section {
-  margin-top: 8px;
-}
-
-.milestone-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.milestone-list-item {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  padding: 12px;
-  transition: all 0.2s;
-}
-
-.milestone-list-item.claimed {
-  background: rgba(76, 175, 80, 0.1);
-  border-color: rgba(76, 175, 80, 0.25);
-}
-
-.milestone-list-item.current {
-  background: rgba(255, 183, 77, 0.12);
-  border-color: rgba(255, 183, 77, 0.4);
-  box-shadow: 0 0 16px rgba(255, 183, 77, 0.15);
-}
-
-.milestone-list-item.unlocked {
-  background: rgba(33, 150, 243, 0.08);
-  border-color: rgba(33, 150, 243, 0.25);
-}
-
-.milestone-list-item.locked {
-  opacity: 0.65;
-}
-
-.milestone-list-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.milestone-list-icon-wrap {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.milestone-list-icon {
-  font-size: 36px;
-  display: block;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
-}
-
-.milestone-list-status {
-  position: absolute;
-  bottom: -2px;
-  right: -4px;
-  font-size: 14px;
-}
-
-.milestone-list-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.milestone-list-name {
-  font-size: 15px;
-  font-weight: bold;
-  color: #ffe0b2;
-  margin-bottom: 4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.milestone-list-level {
-  font-size: 11px;
-  font-weight: normal;
-  color: #8a7060;
-  background: rgba(0, 0, 0, 0.3);
-  padding: 2px 8px;
-  border-radius: 10px;
-}
-
-.milestone-list-desc {
-  font-size: 12px;
-  color: #a1887f;
-  line-height: 1.5;
-}
-
-.milestone-list-details {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.milestone-list-detail-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.milestone-list-detail-row > span:first-child {
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.milestone-list-chip {
-  background: rgba(255, 183, 77, 0.12);
-  border: 1px solid rgba(255, 183, 77, 0.2);
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  color: #ffe0b2;
-}
-
-.milestone-list-chip.reward {
-  background: rgba(129, 199, 132, 0.12);
-  border-color: rgba(129, 199, 132, 0.25);
-  color: #a5d6a7;
-}
-
-.milestone-preview-box {
-  background: rgba(33, 150, 243, 0.08);
-  border: 1px dashed rgba(33, 150, 243, 0.3);
-  border-radius: 10px;
-  padding: 12px;
-  margin: 14px 0;
-}
-
-.milestone-preview-header {
-  margin-bottom: 10px;
-}
-
-.milestone-preview-header span {
-  font-size: 12px;
-  color: #64b5f6;
-  font-weight: 600;
-}
-
-.milestone-preview-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.milestone-preview-item {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 6px 10px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #b0bec5;
-}
-
-.milestone-preview-item.locked {
-  opacity: 0.75;
-}
-
-.milestone-preview-icon {
-  font-size: 18px;
-}
-
-.milestone-preview-name {
-  color: #90a4ae;
+.production-item .bonus-positive {
+  font-size: 10px;
 }
 

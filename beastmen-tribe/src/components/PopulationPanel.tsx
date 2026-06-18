@@ -37,10 +37,6 @@ const formatEffect = (effect: EventEffect): string => {
       return `庆典 +${effect.value} 忠诚`;
     case 'migration':
       return `移民 +${effect.value} 人口`;
-    case 'unlock_panel':
-      return `解锁功能: ${effect.panelId || ''}`;
-    default:
-      return '';
   }
 };
 

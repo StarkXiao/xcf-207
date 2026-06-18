@@ -1,6 +1,5 @@
 import { useGameStore } from '../store/useGameStore';
 import { WARRIORS } from '../data/warriors';
-import { MILESTONES } from '../data/milestones';
 import { RESOURCE_INFO } from '../data/trades';
 import type { WarriorType, Resources } from '../types';
 import { useState } from 'react';
@@ -20,14 +19,7 @@ export function WarriorPanel() {
   const getTrainingPopulation = useGameStore((s) => s.getTrainingPopulation);
   const getAvailablePopulation = useGameStore((s) => s.getAvailablePopulation);
   const retireWarrior = useGameStore((s) => s.retireWarrior);
-  const getWarriorHasRedDot = useGameStore((s) => s.getWarriorHasRedDot);
-  const dismissRedDot = useGameStore((s) => s.dismissRedDot);
-  const getWarriorsToUnlockNext = useGameStore((s) => s.getWarriorsToUnlockNext);
-  const getNextMilestone = useGameStore((s) => s.getNextMilestone);
   const [retireMsg, setRetireMsg] = useState<string>('');
-
-  const nextWarriors = getWarriorsToUnlockNext();
-  const nextMilestone = getNextMilestone();
 
   const totalPower = warriors.reduce(
     (sum, w) => sum + w.attack + w.defense + Math.floor(w.hp / 5),
@@ -43,18 +35,6 @@ export function WarriorPanel() {
     if (!config.requires) return true;
     const building = buildings.find((b) => b.type === config.requires!.building);
     return !!building && building.level >= config.requires!.level;
-  };
-
-  const handleWarriorClick = (type: WarriorType, available: boolean) => {
-    if (!available) return;
-    if (getWarriorHasRedDot(type)) {
-      for (const m of MILESTONES) {
-        if (m.redDots.some((rd) => rd.type === 'warrior' && rd.target === type)) {
-          dismissRedDot(m.id, 'warrior', type);
-        }
-      }
-    }
-    trainWarrior(type);
   };
 
   const getBarracksPopEfficiency = (): number => {
@@ -132,19 +112,15 @@ export function WarriorPanel() {
           const hasPopulation = availablePop >= popCost;
           const available = reqMet && affordable && hasPopulation;
 
-          const hasRedDot = getWarriorHasRedDot(type);
           return (
             <div
               key={type}
               className={`warrior-card ${available ? '' : 'disabled'}`}
-              onClick={() => handleWarriorClick(type, available)}
+              onClick={() => available && trainWarrior(type)}
             >
               <div className="warrior-header">
                 <span className="warrior-icon">{config.icon}</span>
-                <span className="warrior-name">
-                  {config.name}
-                  {hasRedDot && <span className="red-dot">●</span>}
-                </span>
+                <span className="warrior-name">{config.name}</span>
                 <span className="warrior-pop-cost" title="人口占用">
                   👥{popCost}
                 </span>
@@ -189,25 +165,6 @@ export function WarriorPanel() {
           );
         })}
       </div>
-
-      {nextWarriors.length > 0 && nextMilestone && (
-        <div className="milestone-preview-box">
-          <div className="milestone-preview-header">
-            <span>🔓 下一里程碑解锁 ({nextMilestone.icon} Lv.{nextMilestone.townhallLevel})</span>
-          </div>
-          <div className="milestone-preview-items">
-            {nextWarriors.map((w) => {
-              const config = WARRIORS[w];
-              return (
-                <div key={w} className="milestone-preview-item locked">
-                  <span className="milestone-preview-icon">{config.icon}</span>
-                  <span className="milestone-preview-name">{config.name}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {warriors.length > 0 && (
         <div className="army-list">

@@ -13,6 +13,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     buildTime: 30,
     upgradeTime: 60,
     requirements: [],
+    gridSize: { width: 2, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'hut', bonusPercent: 5, description: '附近有兽人小屋时，人口增长率+5%' },
+      { targetBuildingType: 'farm', bonusPercent: 10, description: '附近有狩猎场时，食物产出+10%' },
+    ],
   },
   hut: {
     id: 'hut',
@@ -27,6 +32,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     upgradeTime: 20,
     requirements: [
       { type: 'building', id: 'townhall', level: 1 },
+    ],
+    gridSize: { width: 1, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'townhall', bonusPercent: 10, description: '靠近部落大厅时，人口上限额外+10%' },
+      { targetBuildingType: 'farm', bonusPercent: 8, description: '靠近狩猎场时，幸福度提升，食物消耗-8%' },
     ],
   },
   farm: {
@@ -43,6 +53,12 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'townhall', level: 1 },
     ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'townhall', bonusPercent: 15, description: '靠近部落大厅时，食物产出+15%' },
+      { targetBuildingType: 'hut', bonusPercent: 5, description: '周围有兽人小屋时，食物产出+5%' },
+      { targetBuildingType: 'lumbermill', bonusPercent: 10, description: '靠近伐木场时，狩猎效率提升，食物产出+10%' },
+    ],
   },
   lumbermill: {
     id: 'lumbermill',
@@ -57,6 +73,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     upgradeTime: 25,
     requirements: [
       { type: 'building', id: 'townhall', level: 1 },
+    ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'quarry', bonusPercent: 10, description: '与采石场相邻时，木材产出+10%' },
+      { targetBuildingType: 'smithy', bonusPercent: 15, description: '靠近铁匠铺时，木材供应效率提升，产出+15%' },
     ],
   },
   quarry: {
@@ -73,6 +94,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'townhall', level: 1 },
     ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'lumbermill', bonusPercent: 10, description: '与伐木场相邻时，石料产出+10%' },
+      { targetBuildingType: 'wall', bonusPercent: 15, description: '靠近防御工事时，采石优先保障，产出+15%' },
+    ],
   },
   barracks: {
     id: 'barracks',
@@ -88,6 +114,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'townhall', level: 2 },
       { type: 'population', amount: 10 },
+    ],
+    gridSize: { width: 2, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'smithy', bonusPercent: 20, description: '靠近铁匠铺时，训练速度+20%' },
+      { targetBuildingType: 'wall', bonusPercent: 10, description: '靠近防御工事时，战士防御力+10%' },
     ],
   },
   smithy: {
@@ -106,6 +137,12 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
       { type: 'building', id: 'barracks', level: 1 },
       { type: 'day', amount: 5 },
     ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'barracks', bonusPercent: 15, description: '靠近兵营时，铁矿产出+15%' },
+      { targetBuildingType: 'lumbermill', bonusPercent: 10, description: '靠近伐木场时，燃料充足，产出+10%' },
+      { targetBuildingType: 'quarry', bonusPercent: 10, description: '靠近采石场时，矿石供应稳定，产出+10%' },
+    ],
   },
   market: {
     id: 'market',
@@ -122,6 +159,12 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
       { type: 'building', id: 'townhall', level: 2 },
       { type: 'population', amount: 15 },
     ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'townhall', bonusPercent: 10, description: '靠近部落大厅时，交易税费+10%' },
+      { targetBuildingType: 'warehouse', bonusPercent: 15, description: '靠近大仓库时，交易规模+15%' },
+      { targetBuildingType: 'caravanserai', bonusPercent: 20, description: '靠近商队驿站时，贸易利润+20%' },
+    ],
   },
   wall: {
     id: 'wall',
@@ -136,6 +179,12 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     upgradeTime: 35,
     requirements: [
       { type: 'building', id: 'townhall', level: 1 },
+    ],
+    gridSize: { width: 1, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'quarry', bonusPercent: 10, description: '靠近采石场时，防御力+10%' },
+      { targetBuildingType: 'barracks', bonusPercent: 15, description: '与兵营相邻时，防御协调+15%' },
+      { targetBuildingType: 'wall', bonusPercent: 5, description: '与其他城墙相连时，防御力+5%' },
     ],
   },
   warehouse: {
@@ -153,6 +202,12 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'market', level: 1 },
     ],
+    gridSize: { width: 2, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'market', bonusPercent: 10, description: '靠近交易市场时，存储容量+10%' },
+      { targetBuildingType: 'farm', bonusPercent: 8, description: '靠近狩猎场时，食物保鲜+8%' },
+      { targetBuildingType: 'lumbermill', bonusPercent: 8, description: '靠近伐木场时，木材防潮+8%' },
+    ],
   },
   caravanserai: {
     id: 'caravanserai',
@@ -168,6 +223,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'market', level: 2 },
       { type: 'day', amount: 10 },
+    ],
+    gridSize: { width: 2, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'market', bonusPercent: 15, description: '靠近交易市场时，商队收益+15%' },
+      { targetBuildingType: 'warehouse', bonusPercent: 10, description: '靠近大仓库时，货仓容量+10%' },
     ],
   },
   smugglers_den: {
@@ -185,6 +245,10 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
       { type: 'building', id: 'caravanserai', level: 2 },
       { type: 'population', amount: 30 },
     ],
+    gridSize: { width: 2, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'caravanserai', bonusPercent: 25, description: '靠近商队驿站时，走私利润+25%' },
+    ],
   },
   totem_altar: {
     id: 'totem_altar',
@@ -200,6 +264,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
     requirements: [
       { type: 'building', id: 'townhall', level: 2 },
       { type: 'population', amount: 12 },
+    ],
+    gridSize: { width: 1, height: 1 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'townhall', bonusPercent: 15, description: '靠近部落大厅时，信仰产出+15%' },
+      { targetBuildingType: 'totem_pole', bonusPercent: 10, description: '靠近图腾柱时，信仰共鸣+10%' },
     ],
   },
   totem_pole: {
@@ -217,6 +286,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
       { type: 'building', id: 'totem_altar', level: 2 },
       { type: 'day', amount: 8 },
     ],
+    gridSize: { width: 1, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'totem_altar', bonusPercent: 20, description: '靠近图腾祭坛时，信仰上限+20%' },
+      { targetBuildingType: 'shrine', bonusPercent: 15, description: '靠近圣殿时，神圣力量+15%' },
+    ],
   },
   shrine: {
     id: 'shrine',
@@ -233,6 +307,11 @@ export const BUILDINGS: Record<string, BuildingConfig> = {
       { type: 'building', id: 'totem_pole', level: 3 },
       { type: 'population', amount: 25 },
       { type: 'day', amount: 20 },
+    ],
+    gridSize: { width: 2, height: 2 },
+    adjacencyBonusRules: [
+      { targetBuildingType: 'totem_pole', bonusPercent: 25, description: '靠近图腾柱时，信仰产出+25%' },
+      { targetBuildingType: 'totem_altar', bonusPercent: 20, description: '靠近图腾祭坛时，神圣共鸣+20%' },
     ],
   },
 };

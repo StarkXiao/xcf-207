@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { useGameStore } from '../store/useGameStore';
 import { BUILDINGS } from '../data/buildings';
 import { SEASONS, WEATHERS } from '../data/weather';
+import { getBuildingGridSize, GRID_SIZE } from '../data/grid';
 import type { SeasonType, WeatherType } from '../types';
 
 export class VillageScene extends Phaser.Scene {
@@ -9,6 +10,8 @@ export class VillageScene extends Phaser.Scene {
   private placingBuilding: string | null = null;
   private ghostBuilding: Phaser.GameObjects.Container | null = null;
   private gridGraphics: Phaser.GameObjects.Graphics | null = null;
+  private previewGraphics: Phaser.GameObjects.Graphics | null = null;
+  private previewInfoText: Phaser.GameObjects.Text | null = null;
   private lastTick: number = 0;
   private background: Phaser.GameObjects.Rectangle | null = null;
   private weatherParticles: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
@@ -28,16 +31,27 @@ export class VillageScene extends Phaser.Scene {
 
     this.gridGraphics = this.add.graphics();
     this.gridGraphics.lineStyle(1, 0x2d4a2d, 0.5);
-    const gridSize = 60;
-    for (let x = 0; x < width; x += gridSize) {
+    for (let x = 0; x < width; x += GRID_SIZE) {
       this.gridGraphics.moveTo(x, 0);
       this.gridGraphics.lineTo(x, height);
     }
-    for (let y = 0; y < height; y += gridSize) {
+    for (let y = 0; y < height; y += GRID_SIZE) {
       this.gridGraphics.moveTo(0, y);
       this.gridGraphics.lineTo(width, y);
     }
     this.gridGraphics.strokePath();
+
+    this.previewGraphics = this.add.graphics();
+    this.previewGraphics.setDepth(90);
+
+    this.previewInfoText = this.add.text(10, 10, '', {
+      fontSize: '13px',
+      color: '#ffffff',
+      backgroundColor: 'rgba(0,0,0,0.7)',
+      padding: { x: 8, y: 6 },
+    });
+    this.previewInfoText.setDepth(200);
+    this.previewInfoText.setVisible(false);
 
     this.weatherOverlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
     this.weatherOverlay.setDepth(100);
@@ -49,24 +63,26 @@ export class VillageScene extends Phaser.Scene {
 
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (this.placingBuilding && this.ghostBuilding) {
-        const gridSize = 60;
-        const gx = Math.floor(pointer.x / gridSize) * gridSize + gridSize / 2;
-        const gy = Math.floor(pointer.y / gridSize) * gridSize + gridSize / 2;
+        const gx = Math.floor(pointer.x / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2;
+        const gy = Math.floor(pointer.y / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2;
         this.ghostBuilding.setPosition(gx, gy);
+        this.updatePreview(this.placingBuilding, gx, gy);
       }
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.placingBuilding && this.ghostBuilding) {
-        const gridSize = 60;
-        const gx = Math.floor(pointer.x / gridSize) * gridSize + gridSize / 2;
-        const gy = Math.floor(pointer.y / gridSize) * gridSize + gridSize / 2;
+        const gx = Math.floor(pointer.x / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2;
+        const gy = Math.floor(pointer.y / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2;
 
         const state = useGameStore.getState();
-        const success = state.addToBuildQueue('build', this.placingBuilding as any, gx, gy);
-        if (success) {
-          this.cancelPlacing();
-          this.renderBuildings();
+        const validation = state.validatePlacement(this.placingBuilding as any, gx, gy);
+        if (validation.valid) {
+          const success = state.addToBuildQueue('build', this.placingBuilding as any, gx, gy);
+          if (success) {
+            this.cancelPlacing();
+            this.renderBuildings();
+          }
         }
       }
     });
@@ -273,14 +289,22 @@ export class VillageScene extends Phaser.Scene {
     const config = BUILDINGS[type];
     if (!config) return;
 
+    const gridSize = getBuildingGridSize(type as any);
+    const width = gridSize.width * GRID_SIZE - 10;
+    const height = gridSize.height * GRID_SIZE - 10;
+
     const container = this.add.container(0, 0);
-    const bg = this.add.rectangle(0, 0, 50, 50, 0xffffff, 0.3);
+    const bg = this.add.rectangle(0, 0, width, height, 0xffffff, 0.3);
     bg.setStrokeStyle(2, 0xffff00);
     const icon = this.add.text(0, 0, config.icon, { fontSize: '28px' });
     icon.setOrigin(0.5);
     container.add([bg, icon]);
     container.setAlpha(0.6);
     this.ghostBuilding = container;
+
+    if (this.previewInfoText) {
+      this.previewInfoText.setVisible(true);
+    }
   }
 
   cancelPlacing() {
@@ -288,6 +312,66 @@ export class VillageScene extends Phaser.Scene {
     if (this.ghostBuilding) {
       this.ghostBuilding.destroy();
       this.ghostBuilding = null;
+    }
+    if (this.previewGraphics) {
+      this.previewGraphics.clear();
+    }
+    if (this.previewInfoText) {
+      this.previewInfoText.setVisible(false);
+    }
+  }
+
+  updatePreview(type: string, x: number, y: number) {
+    if (!this.previewGraphics) return;
+    this.previewGraphics.clear();
+
+    const state = useGameStore.getState();
+    const preview = state.getPlacementPreview(type as any, x, y);
+    const gridSize = getBuildingGridSize(type as any);
+
+    const fillColor = preview.canPlace.valid ? 0x00ff00 : 0xff0000;
+    const fillAlpha = preview.canPlace.valid ? 0.15 : 0.25;
+
+    for (const cell of preview.occupiedCells) {
+      const cellX = cell.gx * GRID_SIZE + GRID_SIZE / 2;
+      const cellY = cell.gy * GRID_SIZE + GRID_SIZE / 2;
+      this.previewGraphics.fillStyle(fillColor, fillAlpha);
+      this.previewGraphics.fillRect(cellX - GRID_SIZE / 2 + 2, cellY - GRID_SIZE / 2 + 2, GRID_SIZE - 4, GRID_SIZE - 4);
+      this.previewGraphics.lineStyle(2, fillColor, 0.8);
+      this.previewGraphics.strokeRect(cellX - GRID_SIZE / 2 + 2, cellY - GRID_SIZE / 2 + 2, GRID_SIZE - 4, GRID_SIZE - 4);
+    }
+
+    if (this.ghostBuilding) {
+      const bg = this.ghostBuilding.getAt(0) as Phaser.GameObjects.Rectangle;
+      if (bg) {
+        bg.setStrokeStyle(2, preview.canPlace.valid ? 0x00ff00 : 0xff0000);
+      }
+    }
+
+    if (this.previewInfoText) {
+      const config = BUILDINGS[type];
+      let text = `${config?.icon || ''} ${config?.name || type}\n`;
+      text += `尺寸: ${gridSize.width}x${gridSize.height}\n`;
+      if (!preview.canPlace.valid) {
+        text += `❌ ${preview.canPlace.reason || '无法放置'}\n`;
+      } else {
+        text += `✅ 可以放置\n`;
+      }
+      if (preview.adjacencyBonus.totalBonusPercent > 0) {
+        text += `\n🏆 邻接加成: +${preview.adjacencyBonus.totalBonusPercent}%\n`;
+        for (const detail of preview.adjacencyBonus.bonusDetails.slice(0, 3)) {
+          text += `  ↳ ${detail.neighborBuildingName}: +${detail.bonusPercent}%\n`;
+        }
+      } else {
+        const rules = config?.adjacencyBonusRules || [];
+        if (rules.length > 0) {
+          text += `\n💡 邻接加成规则:\n`;
+          for (const rule of rules.slice(0, 3)) {
+            text += `  ↳ ${rule.description}\n`;
+          }
+        }
+      }
+      this.previewInfoText.setText(text.trim());
     }
   }
 
@@ -301,28 +385,50 @@ export class VillageScene extends Phaser.Scene {
       const config = BUILDINGS[building.type];
       if (!config) continue;
 
+      const gridSize = getBuildingGridSize(building.type);
+      const width = gridSize.width * GRID_SIZE - 10;
+      const height = gridSize.height * GRID_SIZE - 10;
+
       const container = this.add.container(building.x, building.y);
       const bgColor = building.isBuilding ? 0x888888 : 0x5d4037;
-      const bg = this.add.rectangle(0, 0, 50, 50, bgColor);
+      const bg = this.add.rectangle(0, 0, width, height, bgColor);
       bg.setStrokeStyle(2, 0x3e2723);
+
+      const adjacencyBonus = state.getBuildingAdjacencyBonus(building.id);
+      if (adjacencyBonus.totalBonusPercent > 0 && !building.isBuilding) {
+        bg.setStrokeStyle(2, 0xffd700);
+      }
+
       const icon = this.add.text(0, -5, config.icon, { fontSize: '26px' });
       icon.setOrigin(0.5);
-      const levelText = this.add.text(0, 18, `Lv.${building.level}`, {
+      const levelText = this.add.text(0, Math.min(18, height / 2 - 8), `Lv.${building.level}`, {
         fontSize: '11px',
         color: building.isBuilding ? '#ffaa00' : '#ffffff',
       });
       levelText.setOrigin(0.5);
 
+      if (adjacencyBonus.totalBonusPercent > 0 && !building.isBuilding) {
+        const bonusText = this.add.text(0, -height / 2 + 6, `+${adjacencyBonus.totalBonusPercent}%`, {
+          fontSize: '10px',
+          color: '#ffd700',
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          padding: { x: 3, y: 1 },
+        });
+        bonusText.setOrigin(0.5);
+        container.add(bonusText);
+      }
+
       if (building.isBuilding) {
-        const bar = this.add.rectangle(0, 28, 46, 4, 0x000000, 0.5);
-        const fill = this.add.rectangle(-23 + (building.buildProgress / 100) * 46, 28, (building.buildProgress / 100) * 46, 4, 0x4caf50);
+        const barWidth = Math.min(width - 4, 60);
+        const bar = this.add.rectangle(0, Math.min(28, height / 2 - 4), barWidth, 4, 0x000000, 0.5);
+        const fill = this.add.rectangle(-barWidth / 2 + (building.buildProgress / 100) * barWidth, Math.min(28, height / 2 - 4), (building.buildProgress / 100) * barWidth, 4, 0x4caf50);
         fill.setOrigin(0, 0.5);
         container.add([bar, fill]);
       }
 
       container.add([bg, icon, levelText]);
 
-      container.setSize(50, 50);
+      container.setSize(width, height);
       container.setInteractive();
       container.on('pointerover', () => {
         bg.setFillStyle(0x795548);

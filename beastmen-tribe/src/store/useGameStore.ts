@@ -45,13 +45,6 @@ import type {
   PositionRow,
   SaveSlotInfo,
   LoadSaveResult,
-  MilestoneConfig,
-  MilestoneRedDot,
-  MilestoneState,
-  WeaponConfig,
-  WeaponType,
-  SupplyLogEntry,
-  SupplyLineStatus,
 } from '../types';
 import {
   getSaveSlotInfos,
@@ -69,25 +62,17 @@ import {
 } from '../utils/saveManager';
 import { BUILDINGS, getBuildingCost, getBuildingProduction, getBuildingStorageCapacity, checkBuildingRequirements as checkBuildReqs, getBuildTime, getUpgradeTime, getProductionEstimate as getProdEstimate, getUpgradeHints as getUpgHints, getUnlockableBuildings as getUnlockableBldgs, getRequirementDescription } from '../data/buildings';
 import {
-  MILESTONES,
-  getMilestoneByLevel,
-  getTownhallLevel,
-  getUnlockedBuildingsByMilestones,
-  getUnlockedWarriorsByMilestones,
-  getUnlockedPanelsByMilestones,
-  getPendingRedDots,
-  getPanelHasRedDot,
-  getBuildingHasRedDot,
-  getWarriorHasRedDot,
-  getNextMilestone,
-  getMilestoneProgress,
-  getBuildingsToUnlockInNextMilestone,
-  getWarriorsToUnlockInNextMilestone,
-} from '../data/milestones';
+  validatePlacement,
+  calculateAdjacencyBonus,
+  getPlacementPreview,
+  getUpgradeAdjacencyInfo,
+  getAdjacentBonusForBuilding,
+  getTotalAdjacencyProductionMultiplier,
+} from '../data/grid';
 import { WARRIORS, getCounterBonus } from '../data/warriors';
 import { generateInvasion, ENEMIES, isBossWave, getBossForWave, BOSSES, calculateWallDurability as calcWallDurability, calculateTieredRewards, calculateFailureCompensation } from '../data/enemies';
 import { generateTrades } from '../data/trades';
-import { triggerRandomEvent, getStoryEventByMilestone } from '../data/events';
+import { triggerRandomEvent } from '../data/events';
 import {
   NODE_MARCH_TIME,
   EXP_GAIN,
@@ -176,27 +161,6 @@ import {
   refreshStocks,
   updatePriceFluctuations,
 } from '../data/trades';
-import {
-  WEAPONS,
-  createWeapon,
-  createInitialArsenalState,
-  getWeaponConfigForWarrior,
-  calculateDeploymentCost,
-  calculateMaintenanceCost,
-  calculateRepairCost,
-  calculateTotalRepairCost,
-  applyBattleDurabilityLoss,
-  getWeaponEfficiency,
-  repairWeapon,
-  maintainWeapon,
-  getSupplyLineModifier,
-  canEquipWeapon,
-  REPAIR_EFFICIENCY_THRESHOLD,
-  tryBoostSupplyLine,
-  tryDisruptSupplyLine,
-  getIronPriceFluctuationImpact,
-  getSupplyLineStatusName,
-} from '../data/arsenal';
 import type {
   ResourceType,
   ResourceCapacity,
@@ -226,6 +190,10 @@ import type {
   FailureCompensation,
   OfflineBuildingDetail,
   OfflineEarnings,
+  PlacementValidationResult,
+  AdjacencyBonusResult,
+  PlacementPreviewInfo,
+  UpgradeAdjacencyInfo,
 } from '../types';
 
 const SAVE_KEY = 'beastmen_tribe_save';
@@ -587,15 +555,6 @@ const calculateRecruitEfficiency = (loyalty: number, activeEvents: ActiveTribeEv
   return Math.max(0.2, Math.min(2.0, efficiency));
 };
 
-const createInitialMilestoneState = (): MilestoneState => ({
-  claimedMilestones: ['th_1'],
-  dismissedRedDots: [],
-  pendingMilestonePopup: null,
-  eventMilestoneTriggers: [],
-  completedStoryEvents: [],
-  lastTownhallLevel: 1,
-});
-
 const createInitialState = (): GameState => {
   const initialBuildings: Building[] = [
     {
@@ -618,8 +577,6 @@ const createInitialState = (): GameState => {
   ];
 
   const initialFactions = createInitialFactions();
-  const initialThLevel = 1;
-
   return {
     tribeName: '血牙部落',
     day: 1,
@@ -634,9 +591,9 @@ const createInitialState = (): GameState => {
     warriors: [],
     trainingQueue: [],
     invasion: null,
-    trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1, 'normal'),
-    unlockedBuildings: getUnlockedBuildingsByMilestones(initialThLevel),
-    unlockedWarriors: getUnlockedWarriorsByMilestones(initialThLevel),
+    trades: generateTrades(6, 0, initialFactions, createInitialPriceFluctuations(), 1),
+    unlockedBuildings: ['townhall', 'hut', 'farm', 'lumbermill', 'quarry', 'wall', 'totem_altar'],
+    unlockedWarriors: ['grunt'],
     selectedBuildingId: null,
     lastSave: Date.now(),
     totalWins: 0,
@@ -689,9 +646,6 @@ const createInitialState = (): GameState => {
     blackMarketRefreshInterval: 120,
     buildQueue: [],
     maxBuildQueueSize: 3,
-    arsenal: createInitialArsenalState(),
-    supplyLogs: [],
-    milestone: createInitialMilestoneState(),
   };
 };
 
@@ -904,11 +858,12 @@ const calculateOfflineEarningsInternal = (
     const globalProdGovBonus = calculateGovernmentBonus(state, 'production_boost');
     totalGovernmentBonus = Math.max(totalGovernmentBonus, prodGovBonus + globalProdGovBonus);
 
-    const totalProdBonus = 1 +
+    const totalProdBonus = (1 +
       prodTechBonus + globalProdTechBonus +
       prodBuildingBonus + globalProdBuildingBonus +
       prodTotemBonus + globalProdTotemBonus +
-      prodGovBonus + globalProdGovBonus;
+      prodGovBonus + globalProdGovBonus) *
+      getTotalAdjacencyProductionMultiplier(b, state.buildings);
 
     const baseBuildingGain: Partial<Resources> = {};
     const finalBuildingGain: Partial<Resources> = {};
@@ -1013,11 +968,10 @@ const calculateOfflineEarningsInternal = (
 };
 
 const hydrateGameState = (parsed: GameState): GameState => {
-  const supplyLineStatus = parsed.arsenal?.supplyLineStatus || 'normal';
   const state: GameState = {
     ...createInitialState(),
     ...parsed,
-    trades: generateTrades(6, 0, parsed.factions, parsed.priceFluctuations, Math.floor(parsed.day || 1), supplyLineStatus),
+    trades: generateTrades(6, 0, parsed.factions),
     selectedBuildingId: null,
     activeEvents: parsed.activeEvents || [],
     population: parsed.population ?? 8,
@@ -1193,40 +1147,6 @@ const hydrateGameState = (parsed: GameState): GameState => {
 
   state.buildQueue = parsed.buildQueue || [];
   state.maxBuildQueueSize = parsed.maxBuildQueueSize || 3;
-
-  state.arsenal = parsed.arsenal
-    ? {
-        ...createInitialArsenalState(),
-        ...parsed.arsenal,
-      }
-    : createInitialArsenalState();
-  state.supplyLogs = parsed.supplyLogs || [];
-
-  const hydratedThLevel = getTownhallLevel(state.buildings);
-  state.milestone = parsed.milestone
-    ? {
-        ...createInitialMilestoneState(),
-        ...parsed.milestone,
-        claimedMilestones: parsed.milestone.claimedMilestones || [],
-        dismissedRedDots: parsed.milestone.dismissedRedDots || [],
-        eventMilestoneTriggers: parsed.milestone.eventMilestoneTriggers || [],
-        completedStoryEvents: parsed.milestone.completedStoryEvents || [],
-      }
-    : createInitialMilestoneState();
-
-  const milestoneBuildings = getUnlockedBuildingsByMilestones(hydratedThLevel);
-  for (const b of milestoneBuildings) {
-    if (!state.unlockedBuildings.includes(b)) {
-      state.unlockedBuildings.push(b);
-    }
-  }
-  const milestoneWarriors = getUnlockedWarriorsByMilestones(hydratedThLevel);
-  for (const w of milestoneWarriors) {
-    if (!state.unlockedWarriors.includes(w)) {
-      state.unlockedWarriors.push(w);
-    }
-  }
-  state.milestone.lastTownhallLevel = hydratedThLevel;
 
   return state;
 };
@@ -1423,39 +1343,12 @@ interface GameStore extends GameState {
   getUnlockableBuildings: () => BuildingType[];
   checkBuildingRequirements: (type: BuildingType) => { met: boolean; missing: BuildingRequirement[] };
 
-  equipWeaponToWarrior: (warriorId: string, weaponType: WeaponType) => { success: boolean; message: string; ironCost: number };
-  repairWarriorWeapon: (warriorId: string) => { success: boolean; message: string; ironCost: number };
-  repairAllWeapons: () => { success: boolean; message: string; totalIronCost: number };
-  performMaintenance: () => { success: boolean; message: string; totalIronCost: number };
-  checkDeploymentCost: () => { canDeploy: boolean; cost: number; reason?: string };
-  payDeploymentCost: () => { success: boolean; message: string; ironCost: number };
-  getDeploymentCost: () => number;
-  getMaintenanceCost: () => number;
-  getTotalRepairCost: () => number;
-  getWeaponConfig: (warriorType: WarriorType) => WeaponConfig | null;
-  toggleAutoRepair: () => void;
-  toggleAutoMaintenance: () => void;
-  setSupplyLineStatus: (status: SupplyLineStatus) => void;
-  addSupplyLog: (type: SupplyLogEntry['type'], message: string, ironConsumed: number) => void;
-  getSupplyLineEfficiency: () => { costMod: number; efficiencyMod: number };
-  processSupplyTick: (delta: number) => void;
-
-  getCurrentMilestone: () => MilestoneConfig | undefined;
-  getNextMilestone: () => MilestoneConfig | null;
-  getMilestoneProgress: () => { current: MilestoneConfig | undefined; next: MilestoneConfig | null; progress: number };
-  getPendingRedDots: () => MilestoneRedDot[];
-  getPanelHasRedDot: (panelId: string) => boolean;
-  getBuildingHasRedDot: (buildingType: string) => boolean;
-  getWarriorHasRedDot: (warriorType: string) => boolean;
-  dismissRedDot: (milestoneId: string, dotType: string, dotTarget: string) => void;
-  claimMilestonePopup: () => void;
-  closeMilestonePopup: () => void;
-  processMilestoneCheck: () => void;
-  getUnlockedPanels: () => string[];
-  getBuildingsToUnlockNext: () => BuildingType[];
-  getWarriorsToUnlockNext: () => WarriorType[];
-  getAllMilestones: () => MilestoneConfig[];
-  isMilestoneClaimed: (milestoneId: string) => boolean;
+  validatePlacement: (type: BuildingType, x: number, y: number) => PlacementValidationResult;
+  getAdjacencyBonus: (buildingType: BuildingType, x: number, y: number, excludeBuildingId?: string) => AdjacencyBonusResult;
+  getPlacementPreview: (type: BuildingType, x: number, y: number) => PlacementPreviewInfo;
+  getUpgradeAdjacencyInfo: (buildingId: string) => UpgradeAdjacencyInfo;
+  getBuildingAdjacencyBonus: (buildingId: string) => AdjacencyBonusResult;
+  getBuildingAdjacencyMultiplier: (buildingId: string) => number;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -1775,7 +1668,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const globalProdTotemBonus = state.getTotemBonus('production_boost');
       const prodGovBonus = state.getGovernmentBonus('production_boost', b.type);
       const globalProdGovBonus = state.getGovernmentBonus('production_boost');
-      const totalProdBonus = 1 + prodTechBonus + globalProdTechBonus + prodTotemBonus + globalProdTotemBonus + prodGovBonus + globalProdGovBonus;
+      const adjacencyMultiplier = getTotalAdjacencyProductionMultiplier(b, state.buildings);
+      const totalProdBonus = (1 + prodTechBonus + globalProdTechBonus + prodTotemBonus + globalProdTotemBonus + prodGovBonus + globalProdGovBonus) * adjacencyMultiplier;
 
       const newStorage = { ...(b.storage || {}) };
       const cap = getBuildingCapacityByType(b.type, b.level);
@@ -1833,13 +1727,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       actualCost[key as keyof Resources] = Math.floor((amount as number) * (1 + trainCostBonus));
     }
 
-    const weaponConfig = getWeaponConfigForWarrior(type);
-    if (weaponConfig) {
-      const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-      const weaponIronCost = Math.ceil(weaponConfig.ironCost * costMod);
-      actualCost.iron = (actualCost.iron || 0) + weaponIronCost;
-    }
-
     if (!state.spendResources(actualCost)) return false;
 
     const existingQueue = state.trainingQueue.find((q) => q.type === type);
@@ -1888,7 +1775,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         newProgress -= queue.total;
         newCount--;
         const config = WARRIORS[queue.type];
-        const weapon = createWeapon(queue.type);
         completed.push({
           id: generateId(),
           type: queue.type,
@@ -1900,7 +1786,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
           exp: 0,
           position: config.preferredPosition,
           morale: 70,
-          weapon: weapon || undefined,
         });
       }
 
@@ -2093,17 +1978,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       stringLog.push(full.message);
     };
 
-    const deployCheck = state.checkDeploymentCost();
-    if (!deployCheck.canDeploy) {
-      return {
-        result: 'defeat' as const,
-        log: [deployCheck.reason || '军备不足，无法出战'],
-        battleLog: [],
-        battleSummary: null as any,
-      };
-    }
-    state.payDeploymentCost();
-
     let myWarriors = state.warriors.map((w) => ({ ...w }));
     let enemies = invasion.enemies.map((e) => ({ ...e }));
     let wallDurability = { ...invasion.wallDurability };
@@ -2168,19 +2042,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const defBonus = defTechBonus + defTotemBonus + defGovBonus;
       const hpBonus = hpTechBonus + hpTotemBonus + hpGovBonus;
 
-      let weaponAtkBonus = 0;
-      let weaponDefBonus = 0;
-      let weaponEfficiency = 1;
-      if (w.weapon) {
-        weaponEfficiency = getWeaponEfficiency(w.weapon);
-        weaponAtkBonus = w.weapon.attackBonus;
-        weaponDefBonus = w.weapon.defenseBonus;
-      }
-
       return {
         ...w,
-        attack: Math.floor((w.attack + weaponAtkBonus) * (1 + atkBonus) * weaponEfficiency),
-        defense: Math.floor((w.defense + weaponDefBonus) * (1 + defBonus) * weaponEfficiency),
+        attack: Math.floor(w.attack * (1 + atkBonus)),
+        defense: Math.floor(w.defense * (1 + defBonus)),
         maxHp: Math.floor(w.maxHp * (1 + hpBonus)),
         hp: Math.floor(w.hp * (1 + hpBonus)),
         morale: w.morale + (config?.moraleBonus || 0),
@@ -2753,73 +2618,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
     }
 
-    let totalDurabilityLoss = 0;
-    const warriorsWithDurability = myWarriors.map(w => {
-      const originalWarrior = state.warriors.find(ow => ow.id === w.id);
-      if (!originalWarrior?.weapon) return w;
-
-      const durabilityLoss = applyBattleDurabilityLoss(originalWarrior, victory);
-      totalDurabilityLoss += durabilityLoss;
-
-      return {
-        ...w,
-        weapon: originalWarrior.weapon,
-      };
-    });
-
-    if (totalDurabilityLoss > 0) {
-      state.addSupplyLog('battle', `战斗中武器耐久度损失总计 ${totalDurabilityLoss}`, 0);
-    }
-
-    let totalIronConsumed = state.getDeploymentCost();
-    
-    if (state.arsenal.autoRepair && victory) {
-      const repairCost = calculateTotalRepairCost(warriorsWithDurability);
-      const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-      const totalRepairCost = Math.ceil(repairCost * costMod);
-      if (totalRepairCost > 0 && state.canAfford({ iron: totalRepairCost })) {
-        state.spendResources({ iron: totalRepairCost });
-        totalIronConsumed += totalRepairCost;
-        warriorsWithDurability.forEach(w => {
-          if (w.weapon) {
-            w.weapon.durability = w.weapon.maxDurability;
-          }
-        });
-        state.addSupplyLog('repair', `战后自动修复所有武器，消耗铁矿 ${totalRepairCost}`, totalRepairCost);
-      }
-    }
-
-    if (totalIronConsumed > 0) {
-      const disruptResult = tryDisruptSupplyLine(totalIronConsumed, state.arsenal.supplyLineStatus);
-      if (disruptResult.shouldDisrupt) {
-        set({
-          arsenal: {
-            ...state.arsenal,
-            supplyLineStatus: disruptResult.newStatus as any,
-          }
-        });
-        state.addSupplyLog('supply', `大量军备消耗导致补给线状态变更：${getSupplyLineStatusName(disruptResult.newStatus)}`, 0);
-      }
-      
-      const priceImpact = getIronPriceFluctuationImpact(totalIronConsumed);
-      if (priceImpact > 1 && state.priceFluctuations.iron) {
-        const ironFluct = state.priceFluctuations.iron;
-        const newMultiplier = Math.min(2.0, ironFluct.currentMultiplier * priceImpact);
-        set({
-          priceFluctuations: {
-            ...state.priceFluctuations,
-            iron: {
-              ...ironFluct,
-              currentMultiplier: newMultiplier,
-              trend: newMultiplier > ironFluct.currentMultiplier ? 'rising' : (newMultiplier < ironFluct.currentMultiplier ? 'falling' : 'stable'),
-            }
-          }
-        });
-      }
-    }
-
-    myWarriors = warriorsWithDurability;
-
     set({
       warriors: myWarriors,
       invasion: {
@@ -2870,23 +2668,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.spendResources({ [trade.give.resource]: giveAmount });
     state.addResources({ [trade.receive.resource]: trade.receive.amount });
 
-    const isBuyingIron = trade.receive.resource === 'iron';
-    const isSellingIron = trade.give.resource === 'iron';
-    const ironAmount = isBuyingIron ? trade.receive.amount : (isSellingIron ? giveAmount : 0);
-    
-    if (isBuyingIron && ironAmount > 0) {
-      const boostResult = tryBoostSupplyLine(ironAmount, state.arsenal.supplyLineStatus);
-      if (boostResult.shouldBoost) {
-        set({
-          arsenal: {
-            ...state.arsenal,
-            supplyLineStatus: boostResult.newStatus as any,
-          }
-        });
-        state.addSupplyLog('supply', `铁矿交易改善了补给线状态：${getSupplyLineStatusName(boostResult.newStatus)}`, 0);
-      }
-    }
-
     set({
       trades: state.trades.map((t) =>
         t.id === tradeId ? { ...t, stock: t.stock - 1 } : t
@@ -2914,7 +2695,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.spendResources({ gold: 20 });
     const weatherEffects = state.getWeatherEffects();
     set({ 
-      trades: generateTrades(6, weatherEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
+      trades: generateTrades(6, weatherEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day)),
       lastStockRefresh: Date.now(),
     });
   },
@@ -2951,8 +2732,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
           newPopulation += effect.value;
           break;
         case 'recruit_boost':
-          break;
-        case 'unlock_panel':
           break;
       }
     }
@@ -3981,7 +3760,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({
       weather: newWeather,
       weatherDuration: getWeatherDuration(newWeather),
-      trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
+      trades: generateTrades(6, newEffects.tradeModifier, state.factions),
     });
   },
 
@@ -4175,7 +3954,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const setPayload: any = { factions: newFactions };
 
     if (shouldRefreshTrades) {
-      setPayload.trades = generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus);
+      setPayload.trades = generateTrades(6, state.getWeatherEffects().tradeModifier, newFactions);
     }
 
     if (shouldRefreshInvasion) {
@@ -4282,7 +4061,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     if (reputationChanged) {
       const currentState = get();
-      setPayload.trades = generateTrades(6, currentState.getWeatherEffects().tradeModifier, newFactions, currentState.priceFluctuations, Math.floor(currentState.day), currentState.arsenal.supplyLineStatus);
+      setPayload.trades = generateTrades(6, currentState.getWeatherEffects().tradeModifier, newFactions);
       if (!currentState.invasion?.isActive) {
         const wave = Math.floor(currentState.day / 2) + 1;
         setPayload.invasion = generateInvasion(wave, newFactions);
@@ -5299,7 +5078,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: 0,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
       });
       seasonChanged = true;
       weatherChanged = true;
@@ -5310,7 +5089,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         seasonProgress: newSeasonProgress,
         weather: newWeather,
         weatherDuration: getWeatherDuration(newWeather),
-        trades: generateTrades(6, newEffects.tradeModifier, state.factions, state.priceFluctuations, Math.floor(state.day), state.arsenal.supplyLineStatus),
+        trades: generateTrades(6, newEffects.tradeModifier, state.factions),
       });
       weatherChanged = true;
     } else {
@@ -6107,8 +5886,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     state.processPriceFluctuationTick(delta);
     state.processStockRefreshTick(delta);
     state.processBuildQueue(delta);
-    state.processSupplyTick(delta);
-    state.processMilestoneCheck();
 
     const ending = state.checkForEnding();
     if (ending) {
@@ -6283,6 +6060,40 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return checkBuildReqs(type, state.buildings, state.day, state.population);
   },
 
+  validatePlacement: (type, x, y) => {
+    const state = get();
+    return validatePlacement(type, x, y, state.buildings);
+  },
+
+  getAdjacencyBonus: (buildingType, x, y, excludeBuildingId) => {
+    const state = get();
+    return calculateAdjacencyBonus(buildingType, x, y, state.buildings, excludeBuildingId);
+  },
+
+  getPlacementPreview: (type, x, y) => {
+    const state = get();
+    return getPlacementPreview(type, x, y, state.buildings);
+  },
+
+  getUpgradeAdjacencyInfo: (buildingId) => {
+    const state = get();
+    return getUpgradeAdjacencyInfo(buildingId, state.buildings);
+  },
+
+  getBuildingAdjacencyBonus: (buildingId) => {
+    const state = get();
+    const building = state.buildings.find((b) => b.id === buildingId);
+    if (!building) return { totalBonusPercent: 0, bonusDetails: [] };
+    return getAdjacentBonusForBuilding(building, state.buildings);
+  },
+
+  getBuildingAdjacencyMultiplier: (buildingId) => {
+    const state = get();
+    const building = state.buildings.find((b) => b.id === buildingId);
+    if (!building) return 1;
+    return getTotalAdjacencyProductionMultiplier(building, state.buildings);
+  },
+
   canBuild: (type) => {
     const state = get();
     const config = BUILDINGS[type];
@@ -6317,6 +6128,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!config) return false;
 
     if (state.buildQueue.length >= state.maxBuildQueueSize) return false;
+
+    if (type === 'build' && x !== undefined && y !== undefined) {
+      const validation = validatePlacement(buildingType, x, y, state.buildings);
+      if (!validation.valid) return false;
+    }
 
     let targetLevel = 1;
     let totalTime = getBuildTime(buildingType);
@@ -6398,8 +6214,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let newBuildings = [...state.buildings];
     let newUnlocked = [...state.unlockedBuildings];
-    let newUnlockedWarriors = [...state.unlockedWarriors];
-    let newMilestone = { ...state.milestone };
 
     for (const item of completedItems) {
       if (item.type === 'build' && item.x !== undefined && item.y !== undefined) {
@@ -6430,7 +6244,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
         state.updateTaskProgress('build_buildings', 1, item.buildingType);
       } else if (item.type === 'upgrade' && item.buildingId) {
-        
         newBuildings = newBuildings.map((b) => {
           if (b.id !== item.buildingId) return b;
           return { ...b, level: item.targetLevel, isBuilding: false, buildProgress: 100 };
@@ -6444,25 +6257,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
               if (!newUnlocked.includes(bType)) {
                 newUnlocked.push(bType);
               }
-            }
-            
-            const thLevel = building.level;
-            const milestoneBuildings = getUnlockedBuildingsByMilestones(thLevel);
-            for (const bType of milestoneBuildings) {
-              if (!newUnlocked.includes(bType)) {
-                newUnlocked.push(bType);
-              }
-            }
-            const milestoneWarriors = getUnlockedWarriorsByMilestones(thLevel);
-            for (const wType of milestoneWarriors) {
-              if (!newUnlockedWarriors.includes(wType)) {
-                newUnlockedWarriors.push(wType);
-              }
-            }
-            
-            const milestone = getMilestoneByLevel(thLevel);
-            if (milestone && !newMilestone.claimedMilestones.includes(milestone.id)) {
-              newMilestone.pendingMilestonePopup = milestone;
             }
           }
         }
@@ -6485,12 +6279,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
         buildQueue: newQueue,
         buildings: newBuildings,
         unlockedBuildings: newUnlocked,
-        unlockedWarriors: newUnlockedWarriors,
         maxPopulation: calculateMaxPopulation(newBuildings, state.technologies),
         resourceCapacity: calculateResourceCapacity(newBuildings, state.technologies),
         resources: calculateTotalResources(newBuildings),
         totem: newTotem,
-        milestone: newMilestone,
       });
     } else if (newQueue[0]?.progress !== state.buildQueue[0]?.progress) {
       set({ buildQueue: newQueue });
@@ -7122,465 +6914,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ),
     });
     return true;
-  },
-
-  getCurrentMilestone: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getMilestoneByLevel(thLevel);
-  },
-
-  getNextMilestone: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getNextMilestone(thLevel);
-  },
-
-  getMilestoneProgress: () => {
-    const state = get();
-    return getMilestoneProgress(state);
-  },
-
-  getPendingRedDots: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getPendingRedDots(
-      thLevel,
-      state.milestone.claimedMilestones,
-      state.milestone.dismissedRedDots
-    );
-  },
-
-  getPanelHasRedDot: (panelId) => {
-    const state = get();
-    const pendingDots = getPendingRedDots(
-      getTownhallLevel(state.buildings),
-      state.milestone.claimedMilestones,
-      state.milestone.dismissedRedDots
-    );
-    return getPanelHasRedDot(panelId, pendingDots);
-  },
-
-  getBuildingHasRedDot: (buildingType) => {
-    const state = get();
-    const pendingDots = getPendingRedDots(
-      getTownhallLevel(state.buildings),
-      state.milestone.claimedMilestones,
-      state.milestone.dismissedRedDots
-    );
-    return getBuildingHasRedDot(buildingType, pendingDots);
-  },
-
-  getWarriorHasRedDot: (warriorType) => {
-    const state = get();
-    const pendingDots = getPendingRedDots(
-      getTownhallLevel(state.buildings),
-      state.milestone.claimedMilestones,
-      state.milestone.dismissedRedDots
-    );
-    return getWarriorHasRedDot(warriorType, pendingDots);
-  },
-
-  dismissRedDot: (milestoneId, dotType, dotTarget) => {
-    const state = get();
-    const dotId = `${milestoneId}_${dotType}_${dotTarget}`;
-    if (!state.milestone.dismissedRedDots.includes(dotId)) {
-      set({
-        milestone: {
-          ...state.milestone,
-          dismissedRedDots: [...state.milestone.dismissedRedDots, dotId],
-        },
-      });
-    }
-  },
-
-  claimMilestonePopup: () => {
-    const state = get();
-    const popup = state.milestone.pendingMilestonePopup;
-    if (!popup) return;
-
-    if (Object.keys(popup.rewards).length > 0) {
-      state.addResources(popup.rewards);
-    }
-
-    const newTriggerEvents = [...state.milestone.eventMilestoneTriggers, ...popup.triggerEvents];
-    const newCompletedStoryEvents = [...state.milestone.completedStoryEvents];
-
-    for (const eventId of popup.triggerEvents) {
-      const storyEvent = getStoryEventByMilestone(popup.id);
-      if (storyEvent && storyEvent.id === eventId && !newCompletedStoryEvents.includes(eventId)) {
-        newCompletedStoryEvents.push(eventId);
-        if (storyEvent.autoApply) {
-          state.applyEventEffects(storyEvent.effects);
-        }
-        const activeEvent: ActiveTribeEvent = {
-          id: generateId(),
-          eventId: storyEvent.id,
-          name: storyEvent.name,
-          icon: storyEvent.icon,
-          description: storyEvent.storyText,
-          effects: storyEvent.effects,
-          appliedAt: Date.now(),
-          duration: 60,
-        };
-        set({ activeEvents: [...get().activeEvents, activeEvent] });
-      }
-    }
-
-    set({
-      milestone: {
-        ...state.milestone,
-        claimedMilestones: [...state.milestone.claimedMilestones, popup.id],
-        pendingMilestonePopup: null,
-        eventMilestoneTriggers: newTriggerEvents,
-        completedStoryEvents: newCompletedStoryEvents,
-        lastTownhallLevel: popup.townhallLevel,
-      },
-    });
-  },
-
-  closeMilestonePopup: () => {
-    const state = get();
-    const popup = state.milestone.pendingMilestonePopup;
-    if (!popup) return;
-
-    set({
-      milestone: {
-        ...state.milestone,
-        pendingMilestonePopup: null,
-      },
-    });
-  },
-
-  processMilestoneCheck: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    const lastLevel = state.milestone.lastTownhallLevel;
-    
-    if (thLevel <= lastLevel) return;
-
-    const newUnlockedBuildings = [...state.unlockedBuildings];
-    const newUnlockedWarriors = [...state.unlockedWarriors];
-
-    for (let level = lastLevel + 1; level <= thLevel; level++) {
-      const milestoneBuildings = getUnlockedBuildingsByMilestones(level);
-      for (const b of milestoneBuildings) {
-        if (!newUnlockedBuildings.includes(b)) {
-          newUnlockedBuildings.push(b);
-        }
-      }
-      const milestoneWarriors = getUnlockedWarriorsByMilestones(level);
-      for (const w of milestoneWarriors) {
-        if (!newUnlockedWarriors.includes(w)) {
-          newUnlockedWarriors.push(w);
-        }
-      }
-    }
-
-    const currentMilestone = getMilestoneByLevel(thLevel);
-    let pendingPopup = state.milestone.pendingMilestonePopup;
-    if (
-      currentMilestone &&
-      !state.milestone.claimedMilestones.includes(currentMilestone.id) &&
-      !pendingPopup
-    ) {
-      pendingPopup = currentMilestone;
-    }
-
-    set({
-      unlockedBuildings: newUnlockedBuildings,
-      unlockedWarriors: newUnlockedWarriors,
-      milestone: {
-        ...state.milestone,
-        pendingMilestonePopup: pendingPopup,
-        lastTownhallLevel: thLevel,
-      },
-    });
-  },
-
-  getUnlockedPanels: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getUnlockedPanelsByMilestones(thLevel);
-  },
-
-  getBuildingsToUnlockNext: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getBuildingsToUnlockInNextMilestone(thLevel);
-  },
-
-  getWarriorsToUnlockNext: () => {
-    const state = get();
-    const thLevel = getTownhallLevel(state.buildings);
-    return getWarriorsToUnlockInNextMilestone(thLevel);
-  },
-
-  equipWeaponToWarrior: (warriorId, weaponType) => {
-    const state = get();
-    const warrior = state.warriors.find(w => w.id === warriorId);
-    if (!warrior) {
-      return { success: false, message: '战士不存在', ironCost: 0 };
-    }
-
-    if (!canEquipWeapon(warrior.type, weaponType, state.buildings)) {
-      return { success: false, message: '无法装备该武器', ironCost: 0 };
-    }
-
-    const config = WEAPONS[weaponType];
-    if (!config) {
-      return { success: false, message: '武器配置不存在', ironCost: 0 };
-    }
-
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    const ironCost = Math.ceil(config.ironCost * costMod);
-
-    if (!state.canAfford({ iron: ironCost })) {
-      return { success: false, message: `铁矿不足，需要 ${ironCost} 铁矿`, ironCost };
-    }
-
-    state.spendResources({ iron: ironCost });
-
-    const newWeapon = createWeapon(warrior.type);
-    if (newWeapon) {
-      const updatedWarriors = state.warriors.map(w =>
-        w.id === warriorId ? { ...w, weapon: newWeapon } : w
-      );
-      set({ warriors: updatedWarriors });
-      state.addSupplyLog('supply', `为 ${WARRIORS[warrior.type].name} 装备了 ${config.name}`, ironCost);
-      return { success: true, message: `成功装备 ${config.name}`, ironCost };
-    }
-
-    return { success: false, message: '创建武器失败', ironCost: 0 };
-  },
-
-  repairWarriorWeapon: (warriorId) => {
-    const state = get();
-    const warrior = state.warriors.find(w => w.id === warriorId);
-    if (!warrior) {
-      return { success: false, message: '战士不存在', ironCost: 0 };
-    }
-
-    const cost = calculateRepairCost(warrior);
-    if (cost === 0) {
-      return { success: false, message: '武器无需修复', ironCost: 0 };
-    }
-
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    const finalCost = Math.ceil(cost * costMod);
-
-    if (!state.canAfford({ iron: finalCost })) {
-      return { success: false, message: `铁矿不足，需要 ${finalCost} 铁矿`, ironCost: finalCost };
-    }
-
-    state.spendResources({ iron: finalCost });
-    const result = repairWeapon(warrior);
-
-    if (result.success) {
-      const updatedWarriors = state.warriors.map(w =>
-        w.id === warriorId ? { ...warrior } : w
-      );
-      set({ warriors: updatedWarriors });
-      state.addSupplyLog('repair', result.message, finalCost);
-    }
-
-    return { success: result.success, message: result.message, ironCost: finalCost };
-  },
-
-  repairAllWeapons: () => {
-    const state = get();
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    const totalCost = Math.ceil(calculateTotalRepairCost(state.warriors) * costMod);
-
-    if (totalCost === 0) {
-      return { success: false, message: '所有武器状态良好', totalIronCost: 0 };
-    }
-
-    if (!state.canAfford({ iron: totalCost })) {
-      return { success: false, message: `铁矿不足，需要 ${totalCost} 铁矿`, totalIronCost: totalCost };
-    }
-
-    state.spendResources({ iron: totalCost });
-    const updatedWarriors = state.warriors.map(w => {
-      if (w.weapon && w.weapon.durability < w.weapon.maxDurability) {
-        return { ...w, weapon: { ...w.weapon, durability: w.weapon.maxDurability } };
-      }
-      return w;
-    });
-
-    set({ warriors: updatedWarriors });
-    state.addSupplyLog('repair', `修复了所有武器，共 ${updatedWarriors.length} 件`, totalCost);
-    return { success: true, message: `成功修复所有武器`, totalIronCost: totalCost };
-  },
-
-  performMaintenance: () => {
-    const state = get();
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    const totalCost = Math.ceil(calculateMaintenanceCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
-
-    if (!state.canAfford({ iron: totalCost })) {
-      return { success: false, message: `铁矿不足，需要 ${totalCost} 铁矿`, totalIronCost: totalCost };
-    }
-
-    state.spendResources({ iron: totalCost });
-
-    const updatedWarriors = state.warriors.map(w => {
-      if (w.weapon) {
-        const { efficiency } = maintainWeapon(w);
-        if (efficiency < 1) {
-          return { ...w };
-        }
-      }
-      return w;
-    });
-
-    set({
-      warriors: updatedWarriors,
-      arsenal: {
-        ...state.arsenal,
-        lastMaintenanceDay: state.day,
-      }
-    });
-
-    state.addSupplyLog('maintenance', `完成全军武器维护，共 ${updatedWarriors.length} 件`, totalCost);
-    return { success: true, message: `武器维护完成`, totalIronCost: totalCost };
-  },
-
-  checkDeploymentCost: () => {
-    const state = get();
-    if (state.warriors.length === 0) {
-      return { canDeploy: false, cost: 0, reason: '没有可出战的战士' };
-    }
-
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    const cost = Math.ceil(calculateDeploymentCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
-
-    if (!state.canAfford({ iron: cost })) {
-      return { canDeploy: false, cost, reason: `铁矿不足，需要 ${cost} 铁矿作为出战军备` };
-    }
-
-    return { canDeploy: true, cost };
-  },
-
-  payDeploymentCost: () => {
-    const state = get();
-    const check = state.checkDeploymentCost();
-    if (!check.canDeploy) {
-      return { success: false, message: check.reason || '无法出战', ironCost: check.cost };
-    }
-
-    state.spendResources({ iron: check.cost });
-    state.addSupplyLog('deploy', `支付出战军备费用，共 ${state.warriors.length} 名战士`, check.cost);
-    return { success: true, message: `军备补给已到位`, ironCost: check.cost };
-  },
-
-  getDeploymentCost: () => {
-    const state = get();
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    return Math.ceil(calculateDeploymentCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
-  },
-
-  getMaintenanceCost: () => {
-    const state = get();
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    return Math.ceil(calculateMaintenanceCost(state.warriors, state.arsenal.supplyEfficiency) * costMod);
-  },
-
-  getTotalRepairCost: () => {
-    const state = get();
-    const { costMod } = getSupplyLineModifier(state.arsenal.supplyLineStatus);
-    return Math.ceil(calculateTotalRepairCost(state.warriors) * costMod);
-  },
-
-  getWeaponConfig: (warriorType) => {
-    return getWeaponConfigForWarrior(warriorType);
-  },
-
-  toggleAutoRepair: () => {
-    const state = get();
-    set({
-      arsenal: {
-        ...state.arsenal,
-        autoRepair: !state.arsenal.autoRepair,
-      }
-    });
-  },
-
-  toggleAutoMaintenance: () => {
-    const state = get();
-    set({
-      arsenal: {
-        ...state.arsenal,
-        autoMaintenance: !state.arsenal.autoMaintenance,
-      }
-    });
-  },
-
-  setSupplyLineStatus: (status) => {
-    const state = get();
-    set({
-      arsenal: {
-        ...state.arsenal,
-        supplyLineStatus: status,
-      }
-    });
-    state.addSupplyLog('supply', `补给线状态变更为: ${status}`, 0);
-  },
-
-  addSupplyLog: (type, message, ironConsumed) => {
-    const state = get();
-    const newLog: SupplyLogEntry = {
-      id: generateId(),
-      type,
-      message,
-      ironConsumed,
-      timestamp: Date.now(),
-      day: state.day,
-    };
-
-    const updatedLogs = [newLog, ...state.supplyLogs].slice(0, 50);
-    set({ supplyLogs: updatedLogs });
-  },
-
-  getSupplyLineEfficiency: () => {
-    const state = get();
-    return getSupplyLineModifier(state.arsenal.supplyLineStatus);
-  },
-
-  processSupplyTick: (_delta) => {
-    const state = get();
-    const arsenal = state.arsenal;
-
-    const daysSinceLastMaintenance = state.day - arsenal.lastMaintenanceDay;
-    if (arsenal.autoMaintenance && daysSinceLastMaintenance >= arsenal.maintenanceInterval) {
-      const maintenanceCost = state.getMaintenanceCost();
-      if (state.canAfford({ iron: maintenanceCost })) {
-        state.performMaintenance();
-      }
-    }
-
-    if (arsenal.autoRepair) {
-      const damagedWarriors = state.warriors.filter(w =>
-        w.weapon && w.weapon.durability / w.weapon.maxDurability < REPAIR_EFFICIENCY_THRESHOLD
-      );
-      if (damagedWarriors.length > 0) {
-        const repairCost = damagedWarriors.reduce((sum, w) => sum + calculateRepairCost(w), 0);
-        const { costMod } = getSupplyLineModifier(arsenal.supplyLineStatus);
-        const totalCost = Math.ceil(repairCost * costMod);
-        if (state.canAfford({ iron: totalCost })) {
-          state.repairAllWeapons();
-        }
-      }
-    }
-  },
-
-  getAllMilestones: () => {
-    return MILESTONES;
-  },
-
-  isMilestoneClaimed: (milestoneId) => {
-    const state = get();
-    return state.milestone.claimedMilestones.includes(milestoneId);
   },
 }));
 

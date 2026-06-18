@@ -32,6 +32,45 @@ export interface BuildingRequirement {
   amount?: number;
 }
 
+export interface GridSize {
+  width: number;
+  height: number;
+}
+
+export interface AdjacencyBonusRule {
+  targetBuildingType: BuildingType;
+  bonusPercent: number;
+  description: string;
+}
+
+export interface PlacementValidationResult {
+  valid: boolean;
+  reason?: string;
+  overlappingBuildings?: string[];
+}
+
+export interface AdjacencyBonusResult {
+  totalBonusPercent: number;
+  bonusDetails: {
+    neighborBuildingId: string;
+    neighborBuildingType: BuildingType;
+    neighborBuildingName: string;
+    bonusPercent: number;
+  }[];
+}
+
+export interface PlacementPreviewInfo {
+  occupiedCells: { gx: number; gy: number }[];
+  adjacencyBonus: AdjacencyBonusResult;
+  canPlace: PlacementValidationResult;
+}
+
+export interface UpgradeAdjacencyInfo {
+  currentBonus: AdjacencyBonusResult;
+  projectedBonus: AdjacencyBonusResult;
+  bonusGainPercent: number;
+}
+
 export interface BuildingConfig {
   id: BuildingType;
   name: string;
@@ -48,6 +87,8 @@ export interface BuildingConfig {
   buildTime: number;
   upgradeTime: number;
   effects?: BuildingEffect[];
+  gridSize?: GridSize;
+  adjacencyBonusRules?: AdjacencyBonusRule[];
 }
 
 export interface BuildingEffect {
@@ -227,56 +268,6 @@ export interface WarriorConfig {
   requires?: { building: BuildingType; level: number };
 }
 
-export interface Weapon {
-  type: WeaponType;
-  name: string;
-  icon: string;
-  durability: number;
-  maxDurability: number;
-  attackBonus: number;
-  defenseBonus: number;
-  ironCost: number;
-  repairCost: number;
-  maintenanceCost: number;
-}
-
-export type WeaponType = 'axe' | 'bow' | 'spear' | 'hammer' | 'sword' | 'staff';
-
-export interface WeaponConfig {
-  id: WeaponType;
-  name: string;
-  icon: string;
-  maxDurability: number;
-  attackBonus: number;
-  defenseBonus: number;
-  ironCost: number;
-  repairCost: number;
-  maintenanceCost: number;
-  requires?: { building: BuildingType; level: number };
-  warriorTypes: WarriorType[];
-}
-
-export interface ArsenalState {
-  weapons: Record<WarriorType, WeaponConfig>;
-  lastMaintenanceDay: number;
-  maintenanceInterval: number;
-  autoRepair: boolean;
-  autoMaintenance: boolean;
-  supplyLineStatus: SupplyLineStatus;
-  supplyEfficiency: number;
-}
-
-export type SupplyLineStatus = 'normal' | 'disrupted' | 'boosted';
-
-export interface SupplyLogEntry {
-  id: string;
-  type: 'maintenance' | 'repair' | 'deploy' | 'battle' | 'supply';
-  message: string;
-  ironConsumed: number;
-  timestamp: number;
-  day: number;
-}
-
 export interface Warrior {
   id: string;
   type: WarriorType;
@@ -288,7 +279,6 @@ export interface Warrior {
   exp: number;
   position: PositionRow;
   morale: number;
-  weapon?: Weapon;
 }
 
 export interface TrainingQueue {
@@ -437,7 +427,6 @@ export interface TradeOffer {
   factionId?: FactionType;
   expiresAt?: number;
   minReputation?: number;
-  affectedBySupplyLine?: boolean;
 }
 
 export type RiskEventType = 'bandit_attack' | 'storm' | 'landslide' | 'beast_attack' | 'customs_check' | 'plague' | 'betrayal';
@@ -539,25 +528,12 @@ export type EventEffectType =
   | 'recruit_boost'
   | 'plague'
   | 'festival'
-  | 'migration'
-  | 'unlock_panel';
+  | 'migration';
 
 export interface EventEffect {
   type: EventEffectType;
   value: number;
   resource?: ResourceType;
-  panelId?: string;
-}
-
-export interface MilestoneStoryEvent {
-  id: string;
-  milestoneId: string;
-  name: string;
-  description: string;
-  icon: string;
-  effects: EventEffect[];
-  storyText: string;
-  autoApply: boolean;
 }
 
 export interface TribeEventConfig {
@@ -1510,40 +1486,4 @@ export interface GameState {
   blackMarketRefreshInterval: number;
   buildQueue: BuildQueueItem[];
   maxBuildQueueSize: number;
-
-  arsenal: ArsenalState;
-  supplyLogs: SupplyLogEntry[];
-
-  milestone: MilestoneState;
-}
-
-export type RedDotType = 'panel' | 'building' | 'warrior' | 'milestone' | 'tech' | 'event';
-
-export interface MilestoneRedDot {
-  type: RedDotType;
-  target: string;
-  message: string;
-}
-
-export interface MilestoneConfig {
-  id: string;
-  townhallLevel: number;
-  name: string;
-  description: string;
-  icon: string;
-  unlockBuildings: BuildingType[];
-  unlockWarriors: WarriorType[];
-  unlockPanels: string[];
-  triggerEvents: string[];
-  redDots: MilestoneRedDot[];
-  rewards: Partial<Resources>;
-}
-
-export interface MilestoneState {
-  claimedMilestones: string[];
-  dismissedRedDots: string[];
-  pendingMilestonePopup: MilestoneConfig | null;
-  eventMilestoneTriggers: string[];
-  completedStoryEvents: string[];
-  lastTownhallLevel: number;
 }
